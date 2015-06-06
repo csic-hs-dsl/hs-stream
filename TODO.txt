@@ -1,0 +1,6 @@
+- Quitar stChunk y stUnChunk. 
+- Los streams deben tener internamente un entero que dice cada cuantos elementos mueven un resultado.
+- Rehacer el parMap ya que no tenemos algo que genere paralelismo lindo.
+- Hacer un ejecutor con monadPar
+- Implentar operaciones de split y cosas algebraicas
+- Implementar concat
