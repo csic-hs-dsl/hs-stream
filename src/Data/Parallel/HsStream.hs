@@ -31,58 +31,18 @@ import Control.Concurrent.Chan.Unagi.Bounded (InChan, OutChan, newChan, readChan
 {- ============================== DSL =============================== -}
 {- ================================================================== -}
 
-class DIM dim where
-    dimLinearSize :: dim -> Int
+data Stream d where
+    StUnfold   :: (NFData o) => Int -> (i -> (Maybe (o, i))) -> i -> Stream o
+    
+    StMap      :: (NFData o) => Int -> (i -> o) -> Stream i -> Stream o
+    StFilter   :: Int -> (i -> Bool) -> Stream i -> Stream i
+    
+    StJoin     :: Int -> Stream i1 -> Stream i2 -> Stream (i1, i2)
+--    StSplit    :: Int -> Stream i -> (Stream i, Stream i)
 
-data Z = Z deriving (Show, Read)
-
-data tail :. head
-    = !tail :. !head
-    deriving (Show, Read, Eq, Ord)
-infixl 3 :.
-
-instance DIM Z where
-    dimLinearSize _ = 1
-
-instance DIM dim => DIM (dim :. Int) where
-    dimLinearSize (tail :. head) = head * (dimLinearSize tail)
-
--- | An accessor to the head of the ':.' type
-dimHead :: (DIM dim) => (dim :. Int) -> Int
-dimHead (_ :. head) = head
-
--- | An accessor to the tail of the ':.' type
-dimTail :: (DIM dim) => (dim :. Int) -> dim
-dimTail (tail :. _) = tail
-
-data Stream dim d where
-    StUnfoldr  :: (NFData o, DIM dim) => dim -> (i -> (Maybe (o, i))) -> i -> Stream dim o
-    StMap      :: (NFData o, DIM dim) => dim -> (i -> o) -> Stream dim i -> Stream dim o
-    StParMap   :: (NFData o, DIM dim) => dim -> (i -> o) -> Stream dim i -> Stream dim o
-
-    StChunk    :: (DIM dim) => (dim :. Int) -> Stream dim i -> Stream (dim:.Int) i
-    StUnChunk  :: (DIM dim) => dim -> Stream (dim:.Int) i -> Stream dim i
-    StUntil    :: (DIM dim) => dim -> (c -> i -> c) -> c -> (c -> Bool) -> Stream dim i -> Stream dim i
-
--- | An accessor to the dimension of a 'Stream'
-stDim :: Stream dim d -> dim
-stDim (StUnfoldr dim _ _) = dim
-stDim (StMap dim _ _) = dim
-stDim (StParMap dim _ _) = dim
-stDim (StChunk dim _) = dim
-stDim (StUnChunk dim _) = dim
-stDim (StUntil dim _ _ _ _) = dim
-
-
-class StUnfoldrSupport fun i o where
-    stUnfoldr :: (DIM dim) => dim -> fun -> i -> Stream dim o
-
-instance (NFData o) => StUnfoldrSupport (i -> (Maybe (o, i))) i o where
-    stUnfoldr dim = StUnfoldr dim
-
-instance (NFData o) => StUnfoldrSupport (i -> (o, i)) i o where
-    stUnfoldr dim f = StUnfoldr dim (Just . f)
-
+    StConcat   :: Int -> Stream i -> Stream i -> Stream i
+    
+    StUntil    :: (c -> i -> c) -> c -> (c -> Bool) -> Stream i -> Stream i
 
 {- ================================================================== -}
 {- ======================= Execution Context ======================== -}
@@ -150,7 +110,7 @@ handleBackMsg continue bqi bqo = do
         Just Stop -> writeQueue bqo Stop
 
 
-execStream :: IOEC -> Stream dim i -> IO (Queue (Maybe (S.Seq i)), Queue BackMsg)
+execStream :: IOEC -> Stream i -> IO (Queue (Maybe (S.Seq i)), Queue BackMsg)
 execStream ec (StUnfoldr dim gen i) = do
     qo <- newQueue (queueLimit ec)
     bqi <- newQueue (queueLimit ec)
