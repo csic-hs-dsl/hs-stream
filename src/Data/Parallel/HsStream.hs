@@ -19,7 +19,7 @@ import Control.Concurrent (forkIO)
 import Control.Concurrent.MVar (MVar, newEmptyMVar, putMVar, readMVar)
 import Control.DeepSeq (NFData, rnf)
 import Control.Exception (evaluate)
-import Control.Monad (liftM)
+import Control.Monad (liftM, when)
 import Prelude hiding (id, mapM, mapM_, take)
 --import Prelude (Bool, Either, Int, Maybe(Just, Nothing), ($), Show, Read, Eq, Ord, (*), Monad)
 
@@ -60,8 +60,8 @@ class (Monad m) => Exec m where
 {- ================================================================== -}
 
 -- | Creates a Stream from a List. Requires 'NFData' of its elements in order to fully evaluate them.
-stFromList :: (DIM dim, NFData a) => dim -> [a] -> Stream dim a
-stFromList dim l = StUnfoldr dim go l
+stFromList :: (NFData a) => Int -> [a] -> Stream a
+stFromList dim l = StUnfold dim go l
     where
         go [] = Nothing
         go (x:xs) = Just (x, xs)
@@ -109,9 +109,32 @@ handleBackMsg continue bqi bqo = do
         Nothing -> continue
         Just Stop -> writeQueue bqo Stop
 
+makeChunk :: S.Seq i -> Int -> (Maybe (S.Seq i), S.Seq i)
+makeChunk acc n
+    | len == n = (Just acc, S.empty)
+    | len > n = (Just pre, post)
+    | len < n = (Nothing, acc)
+    where 
+        len = S.length acc
+        (pre, post) = S.splitAt n acc
+
+readChunk :: S.Seq i -> Int -> Queue (Maybe (S.Seq i)) -> IO (Maybe (S.Seq i), S.Seq i)
+readChunk acc n qi =
+    if (S.length acc >= n) then do
+        let (chunk, nAcc) = S.splitAt n acc
+        return (Just chunk, nAcc)
+    else do
+        res <- readQueue qi
+        case res of 
+            Just vi -> do 
+                let (mChunk, nacc) = makeChunk (acc S.>< vi) n
+                case mChunk of
+                    Just chunk -> return (Just chunk, nacc)
+                    Nothing -> readChunk nacc n qi
+            Nothing -> return (Nothing, acc)
 
 execStream :: IOEC -> Stream i -> IO (Queue (Maybe (S.Seq i)), Queue BackMsg)
-execStream ec (StUnfoldr dim gen i) = do
+execStream ec (StUnfold n gen i) = do
     qo <- newQueue (queueLimit ec)
     bqi <- newQueue (queueLimit ec)
     _ <- forkIO $ recc qo bqi i
@@ -121,16 +144,14 @@ execStream ec (StUnfoldr dim gen i) = do
             backMsg <- tryReadQueue bqi
             case backMsg of
                 Nothing -> do
-                    (elems, i') <- genElems (dimLinearSize dim) S.empty i
-                    if (not $ S.null elems) 
-                        then writeQueue qo (Just elems)
-                        else return ()
+                    (elems, i') <- genElems n S.empty i
+                    when (not $ S.null elems) $ 
+                        writeQueue qo (Just elems)
                     if (isJust i') 
                         then recc qo bqi (fromJust i')
                         else writeQueue qo Nothing
                 Just Stop -> do
                     writeQueue qo Nothing
-                    return ()
         genElems 0 seq i = return (seq, Just i)
         genElems size seq i = do
             let res = gen i
@@ -141,108 +162,81 @@ execStream ec (StUnfoldr dim gen i) = do
                 Nothing -> return (seq, Nothing)
 
 
-execStream ec (StMap _ sk stream) = do
+execStream ec (StMap n f stream) = do
     qo <- newQueue (queueLimit ec)
     bqi <- newQueue (queueLimit ec)
     (qi, bqo) <- execStream ec stream
-    _ <- forkIO $ recc qi qo bqi bqo
+    _ <- forkIO $ recc qi qo bqi bqo S.empty
     return (qo, bqi)
     where 
-        recc qi qo bqi bqo = do
+        recc qi qo bqi bqo acc = do
             let 
                 continue = do
-                    res <- readQueue qi
-                    case res of 
-                        Just vi -> do 
-                            vo <- eval $ fmap sk vi
+                    (mChunk, nAcc) <- readChunk acc n qi
+                    case mChunk of 
+                        Just chunk -> do 
+                            vo <- eval $ fmap f chunk
                             writeQueue qo (Just vo)
-                            recc qi qo bqi bqo
-                        Nothing -> writeQueue qo Nothing
-            handleBackMsg continue bqi bqo
-
-execStream ec (StChunk dim stream) = do
-    qo <- newQueue (queueLimit ec)
-    bqi <- newQueue (queueLimit ec)
-    (qi, bqo) <- execStream ec stream
-    let chunkSize = dimLinearSize dim
-    _ <- forkIO $ recc qi qo bqi bqo S.empty chunkSize
-    return (qo, bqi)
-    where 
-        recc qi qo bqi bqo storage chunkSize = do
-            let 
-                continue = do
-                    i <- readQueue qi
-                    case i of
-                        Just vi -> do
-                            let storage' = storage S.>< vi
-                            if (S.length storage' == chunkSize) 
-                                then do
-                                    writeQueue qo (Just $ storage')
-                                    recc qi qo bqi bqo S.empty chunkSize
-                                else do
-                                    recc qi qo bqi bqo storage' chunkSize
+                            recc qi qo bqi bqo nAcc
                         Nothing -> do
-                            if (S.length storage > 0)
-                                then writeQueue qo (Just $ storage)
-                                else return ()
+                            when (not $ S.null nAcc) $ do
+                                vo <- eval $ fmap f nAcc
+                                writeQueue qo (Just vo)
                             writeQueue qo Nothing
             handleBackMsg continue bqi bqo
 
-execStream ec (StUnChunk _ stream) = do
-    let chunk = dimHead . stDim $ stream
+-- Le falta el stop!!!!!!!!!!!!!!!!!!
+execStream ec (StJoin n st1 st2) = do
     qo <- newQueue (queueLimit ec)
     bqi <- newQueue (queueLimit ec)
-    (qi, bqo) <- execStream ec stream
-    _ <- forkIO $ recc qi qo bqi bqo chunk
+    (qi1, bqo1) <- execStream ec st1
+    (qi2, bqo2) <- execStream ec st2
+    _ <- forkIO $ recc qi1 qi2 qo bqi bqo1 bqo2 S.empty S.empty
     return (qo, bqi)
     where 
-        recc qi qo bqi bqo chunk = do
-            let 
-                continue = do
-                    i <- readQueue qi
-                    case i of
-                        Just vsi -> do
-                            let maxChunkIdx = div (S.length vsi) chunk
-                            mapM_ (\c -> writeQueue qo . Just . S.take chunk . S.drop (c * chunk) $ vsi) [0 .. maxChunkIdx]
-                            recc qi qo bqi bqo chunk
-                        Nothing -> do
-                            writeQueue qo Nothing
-            handleBackMsg continue bqi bqo
+        recc qi1 qi2 qo bqi bqo1 bqo2 acc1 acc2 = do
+            (mChunk1, nAcc1) <- readChunk acc1 n qi1
+            (mChunk2, nAcc2) <- readChunk acc2 n qi2
+            case (mChunk1, mChunk2) of
+                (Just chunk1, Just chunk2) -> do
+                    writeQueue qo (Just (S.zip chunk1 chunk2))
+                    recc qi1 qi2 qo bqi bqo1 bqo2 nAcc1 nAcc2
+                (Nothing, Nothing) -> do
+                    when ((not $ S.null nAcc1) && (not $ S.null nAcc2)) $
+                        writeQueue qo (Just (S.zip nAcc1 nAcc2))
+                    writeQueue qo Nothing
+                (Nothing, Just chunk2) -> do
+                    when (not $ S.null nAcc1) $
+                        writeQueue qo (Just (S.zip nAcc1 chunk2))
+                    writeQueue qo Nothing
+                (Just chunk1, Nothing) -> do
+                    when (not $ S.null nAcc2) $
+                        writeQueue qo (Just (S.zip chunk1 nAcc2))
+                    writeQueue qo Nothing                    
+
+execStream ec (StConcat n st1 st2) = do
+    qo <- newQueue (queueLimit ec)
+    bqi <- newQueue (queueLimit ec)
+    (qi1, bqo1) <- execStream ec st1
+    (qi2, bqo2) <- execStream ec st2
+    _ <- forkIO $ recc qi1 qi2 qo bqi bqo1 bqo2
+    return (qo, bqi)
+    where
+        recc_ qi qo bqi bqo acc = do
+            (mChunk, nAcc) <- readChunk acc n qi
+            case mChunk of 
+                Just chunk -> do 
+                    writeQueue qo (Just chunk)
+                    recc_ qi qo bqi bqo nAcc
+                Nothing -> return nAcc
+        recc qi1 qi2 qo bqi bqo1 bqo2 = do
+            acc1 <- recc_ qi1 qo bqi bqo1 S.empty
+            acc2 <- recc_ qi2 qo bqi bqo2 acc1
+            when (not $ S.null acc2) $
+                writeQueue qo (Just acc2)
+            writeQueue qo Nothing            
 
 {-
-execStream ec (StParMap _ sk stream) = do
-    qo1 <- newQueue (queueLimit ec)
-    bqi1 <- newQueue (queueLimit ec)
-    qo2 <- newQueue (queueLimit ec)
-    bqi2 <- newQueue (queueLimit ec)
-    (qi, bqo) <- execStream ec stream
-    _ <- forkIO $ recc1 qi qo1 bqi1 bqo
-    _ <- forkIO $ recc2 qo1 qo2 bqi2 bqi1
-    return (qo2, bqi2)
-    where 
-        recc1 qi qo bqi bqo = do
-            let 
-                continue = do
-                    res <- readQueue qi
-                    case res of 
-                        Just vi -> do
-                            vo <- exec ec (SkFork (SkMap sk)) vi
-                            writeQueue qo (Just vo)
-                            recc1 qi qo bqi bqo
-                        Nothing -> writeQueue qo Nothing
-            handleBackMsg continue bqi bqo
-        recc2 qi qo bqi bqo = do
-            let 
-                continue = do
-                    res <- readQueue qi
-                    case res of 
-                        Just vi -> do
-                            vo <- exec ec SkSync vi
-                            writeQueue qo (Just vo)
-                            recc2 qi qo bqi bqo
-                        Nothing -> writeQueue qo Nothing
-            handleBackMsg continue bqi bqo
--}
 execStream ec (StUntil _ skF z skCond stream) = do
     qo <- newQueue (queueLimit ec)
     bqi <- newQueue (queueLimit ec)
@@ -279,4 +273,4 @@ execStream ec (StUntil _ skF z skCond stream) = do
                             writeQueue qo Nothing
             handleBackMsg continue bqi bqo
 
-
+-}
