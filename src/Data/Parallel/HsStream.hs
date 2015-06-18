@@ -15,7 +15,7 @@ import qualified Data.Sequence as S
 import Data.Foldable (mapM_, foldlM)
 import Data.Maybe (isJust, fromJust)
 import Data.Traversable (Traversable, mapM)
-import Control.Concurrent (forkIO)
+import Control.Concurrent (forkIO, ThreadId, killThread)
 import Control.Concurrent.MVar (MVar, newEmptyMVar, putMVar, readMVar)
 import Control.DeepSeq (NFData, rnf)
 import Control.Exception (evaluate)
@@ -100,15 +100,6 @@ eval a = do
     evaluate $ rnf a
     return a
 
-data BackMsg = Stop
-
-handleBackMsg :: IO () -> Queue BackMsg -> Queue BackMsg -> IO ()
-handleBackMsg continue bqi bqo = do
-    backMsg <- tryReadQueue bqi
-    case backMsg of
-        Nothing -> continue
-        Just Stop -> writeQueue bqo Stop
-
 makeChunk :: S.Seq i -> Int -> (Maybe (S.Seq i), S.Seq i)
 makeChunk acc n
     | len == n = (Just acc, S.empty)
@@ -133,25 +124,19 @@ readChunk acc n qi =
                     Nothing -> readChunk nacc n qi
             Nothing -> return (Nothing, acc)
 
-execStream :: IOEC -> Stream i -> IO (Queue (Maybe (S.Seq i)), Queue BackMsg)
+execStream :: IOEC -> Stream i -> IO ([ThreadId], Queue (Maybe (S.Seq i)))
 execStream ec (StUnfold n gen i) = do
     qo <- newQueue (queueLimit ec)
-    bqi <- newQueue (queueLimit ec)
-    _ <- forkIO $ recc qo bqi i
-    return (qo, bqi)
+    tid <- forkIO $ recc qo i
+    return ([tid], qo)
     where 
-        recc qo bqi i = do
-            backMsg <- tryReadQueue bqi
-            case backMsg of
-                Nothing -> do
-                    (elems, i') <- genElems n S.empty i
-                    when (not $ S.null elems) $ 
-                        writeQueue qo (Just elems)
-                    if (isJust i') 
-                        then recc qo bqi (fromJust i')
-                        else writeQueue qo Nothing
-                Just Stop -> do
-                    writeQueue qo Nothing
+        recc qo i = do
+            (elems, i') <- genElems n S.empty i
+            when (not $ S.null elems) $ 
+                writeQueue qo (Just elems)
+            if (isJust i') 
+                then recc qo (fromJust i')
+                else writeQueue qo Nothing
         genElems 0 seq i = return (seq, Just i)
         genElems size seq i = do
             let res = gen i
@@ -164,43 +149,37 @@ execStream ec (StUnfold n gen i) = do
 
 execStream ec (StMap n f stream) = do
     qo <- newQueue (queueLimit ec)
-    bqi <- newQueue (queueLimit ec)
-    (qi, bqo) <- execStream ec stream
-    _ <- forkIO $ recc qi qo bqi bqo S.empty
-    return (qo, bqi)
+    (tids, qi) <- execStream ec stream
+    tid <- forkIO $ recc qi qo S.empty
+    return (tid : tids, qo)
     where 
-        recc qi qo bqi bqo acc = do
-            let 
-                continue = do
-                    (mChunk, nAcc) <- readChunk acc n qi
-                    case mChunk of 
-                        Just chunk -> do 
-                            vo <- eval $ fmap f chunk
-                            writeQueue qo (Just vo)
-                            recc qi qo bqi bqo nAcc
-                        Nothing -> do
-                            when (not $ S.null nAcc) $ do
-                                vo <- eval $ fmap f nAcc
-                                writeQueue qo (Just vo)
-                            writeQueue qo Nothing
-            handleBackMsg continue bqi bqo
+        recc qi qo acc = do
+            (mChunk, nAcc) <- readChunk acc n qi
+            case mChunk of 
+                Just chunk -> do 
+                    vo <- eval $ fmap f chunk
+                    writeQueue qo (Just vo)
+                    recc qi qo nAcc
+                Nothing -> do
+                    when (not $ S.null nAcc) $ do
+                        vo <- eval $ fmap f nAcc
+                        writeQueue qo (Just vo)
+                    writeQueue qo Nothing
 
--- Le falta el stop!!!!!!!!!!!!!!!!!!
 execStream ec (StJoin n st1 st2) = do
     qo <- newQueue (queueLimit ec)
-    bqi <- newQueue (queueLimit ec)
-    (qi1, bqo1) <- execStream ec st1
-    (qi2, bqo2) <- execStream ec st2
-    _ <- forkIO $ recc qi1 qi2 qo bqi bqo1 bqo2 S.empty S.empty
-    return (qo, bqi)
+    (tids1, qi1) <- execStream ec st1
+    (tids2, qi2) <- execStream ec st2
+    tid <- forkIO $ recc qi1 qi2 qo S.empty S.empty
+    return (tid : (tids1 ++ tids2), qo)
     where 
-        recc qi1 qi2 qo bqi bqo1 bqo2 acc1 acc2 = do
+        recc qi1 qi2 qo acc1 acc2 = do
             (mChunk1, nAcc1) <- readChunk acc1 n qi1
             (mChunk2, nAcc2) <- readChunk acc2 n qi2
             case (mChunk1, mChunk2) of
                 (Just chunk1, Just chunk2) -> do
                     writeQueue qo (Just (S.zip chunk1 chunk2))
-                    recc qi1 qi2 qo bqi bqo1 bqo2 nAcc1 nAcc2
+                    recc qi1 qi2 qo nAcc1 nAcc2
                 (Nothing, Nothing) -> do
                     when ((not $ S.null nAcc1) && (not $ S.null nAcc2)) $
                         writeQueue qo (Just (S.zip nAcc1 nAcc2))
@@ -217,60 +196,54 @@ execStream ec (StJoin n st1 st2) = do
 execStream ec (StConcat n st1 st2) = do
     qo <- newQueue (queueLimit ec)
     bqi <- newQueue (queueLimit ec)
-    (qi1, bqo1) <- execStream ec st1
-    (qi2, bqo2) <- execStream ec st2
-    _ <- forkIO $ recc qi1 qi2 qo bqi bqo1 bqo2
-    return (qo, bqi)
+    (tids1, qi1) <- execStream ec st1
+    (tids2, qi2) <- execStream ec st2
+    tid <- forkIO $ recc qi1 qi2 qo
+    return (tid : (tids1 ++ tids2), qo)
     where
-        recc_ qi qo bqi bqo acc = do
+        recc_ qi qo acc = do
             (mChunk, nAcc) <- readChunk acc n qi
             case mChunk of 
                 Just chunk -> do 
                     writeQueue qo (Just chunk)
-                    recc_ qi qo bqi bqo nAcc
+                    recc_ qi qo nAcc
                 Nothing -> return nAcc
-        recc qi1 qi2 qo bqi bqo1 bqo2 = do
-            acc1 <- recc_ qi1 qo bqi bqo1 S.empty
-            acc2 <- recc_ qi2 qo bqi bqo2 acc1
+        recc qi1 qi2 qo = do
+            acc1 <- recc_ qi1 qo S.empty
+            acc2 <- recc_ qi2 qo acc1
             when (not $ S.null acc2) $
                 writeQueue qo (Just acc2)
             writeQueue qo Nothing            
 
-{-
-execStream ec (StUntil _ skF z skCond stream) = do
+execStream ec (StUntil f z until stream) = do
     qo <- newQueue (queueLimit ec)
-    bqi <- newQueue (queueLimit ec)
-    (qi, bqo) <- execStream ec stream
-    _ <- forkIO $ recc qi qo bqi bqo z
-    return (qo, bqi)
+    (tids, qi) <- execStream ec stream
+    tid <- forkIO $ recc qi qo z tids
+    return (tid : tids, qo)
     where 
-        recc qi qo bqi bqo acc = do
-            let 
-                continue = do
-                    i <- readQueue qi
-                    case i of
-                        Just vi -> do
-                            (acc', pos, stop) <- 
-                                foldlM (\(a, p, cond) v -> 
-                                    do -- esto no esta muy bien ya que recorre todo el arreglo
-                                        if cond
-                                            then do
-                                                return (a, p, cond)
-                                            else do
-                                                a' <- return $ skF a v
-                                                cond' <- return $ skCond a'
-                                                return (a', p + 1, cond')
-                                    ) (acc, 0, False) vi
-                            if stop
-                                then do
-                                    writeQueue qo (Just $ S.take (pos + 1) vi)
-                                    writeQueue bqo Stop
-                                    writeQueue qo Nothing
-                                else do
-                                    writeQueue qo (Just vi)
-                                    recc qi qo bqi bqo acc'
-                        Nothing -> do
+        recc qi qo acc tids = do
+            i <- readQueue qi
+            case i of
+                Just vi -> do
+                    (acc', pos, stop) <- 
+                        foldlM (\(a, p, cond) v -> 
+                            do -- esto no esta muy bien ya que recorre todo el arreglo
+                                if cond
+                                    then do
+                                        return (a, p, cond)
+                                    else do
+                                        a' <- return $ f a v
+                                        cond' <- return $ until a'
+                                        return (a', p + 1, cond')
+                            ) (acc, 0, False) vi
+                    if stop
+                        then do
+                            writeQueue qo (Just $ S.take (pos + 1) vi)
+                            -- Matar todo
+                            mapM killThread tids
                             writeQueue qo Nothing
-            handleBackMsg continue bqi bqo
-
--}
+                        else do
+                            writeQueue qo (Just vi)
+                            recc qi qo acc' tids
+                Nothing -> do
+                    writeQueue qo Nothing
