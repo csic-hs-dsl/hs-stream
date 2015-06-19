@@ -8,7 +8,7 @@
 {-# OPTIONS_HADDOCK show-extensions #-}
 
 
-module HsStream where
+module Data.Parallel.HsStream where
 
 
 import qualified Data.Sequence as S
@@ -89,7 +89,7 @@ readQueue = readChan . outChan
 
 tryReadQueue :: Queue a -> IO (Maybe a)
 tryReadQueue q = do
-    elem <- tryReadChan $ outChan q
+    (elem, _) <- tryReadChan $ outChan q
     tryRead elem
 
 writeQueue :: Queue a -> a -> IO ()
