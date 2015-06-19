@@ -27,8 +27,7 @@ instance (Show a) => Show (Stream a) where
     show st = show $ unsafePerformIO $ streamToList st
 
 defaultIOEC :: IOEC
-defaultIOEC = IOEC 10
-
+defaultIOEC = IOEC 17
 
 streamToList :: Stream o -> IO [o]
 streamToList stream = do
@@ -48,306 +47,87 @@ streamToList stream = do
 {- ============================= Tests ============================== -}
 {- ================================================================== -}
 
--- ----------------------------------------------------------------------------
-test01 :: IO ()
-test01 = do
-    putStr "StUnfold: Empty - Chunck size = 1"
-    let expected = [] :: [Int]
-        stream = stFromList 1 expected
+elementsMsg :: Int -> String
+elementsMsg n 
+    | n == 0 = "Empty"
+    | n == 1 = "1 element"
+    | n > 1  = show n ++ " elements"
+
+
+testUnfold :: Int -> Int -> IO ()
+testUnfold size chuck = do
+    putStr $ "* (" ++ elementsMsg size ++ ") - Chunck size = " ++ show chuck
+    let expected = [1..size] :: [Int]
+        stream = stFromList chuck expected
     result <- streamToList stream
     assertEquals expected result
 
-test02 :: IO ()
-test02 = do
-    putStr "StUnfold: Empty - Chunck size = 3"
-    let expected = [] :: [Int]
-        stream = stFromList 3 expected
-    result <- streamToList stream
-    assertEquals expected result
-
-test03 :: IO ()
-test03 = do
-    putStr "StUnfold: 50 elements - Chuck size = 1"
-    let expected = [1..50] :: [Int]
-        stream = stFromList 1 expected
-    result <- streamToList stream
-    assertEquals expected result
-
-test04 :: IO ()
-test04 = do
-    putStr "StUnfold: 50 elements - Chuck size = 5"
-    let expected = [1..50] :: [Int]
-        stream = stFromList 5 expected
-    result <- streamToList stream
-    assertEquals expected result
-
-test05 :: IO ()
-test05 = do
-    putStr "StUnfold: 50 elements - Chuck size = 3"
-    let expected = [1..50] :: [Int]
-        stream = stFromList 3 expected
-    result <- streamToList stream
-    assertEquals expected result
-
--- ----------------------------------------------------------------------------
-test06 :: IO ()
-test06 = do
-    putStr "StUnfold -> StMap: Empty - Chunck size = (1, 1)"
-    let list = [] :: [Int]
+testUnfoldMap :: Int -> (Int, Int) -> IO ()
+testUnfoldMap size (chunkUnf, chunkMap) = do
+    putStr $ "* (" ++ elementsMsg size ++ ") - Chunck size = " ++ show (chunkUnf, chunkMap)
+    let list = [1..size] :: [Int]
         fun = (+5) . (*2)
         expected = map fun list
-        stream = StMap 1 fun (stFromList 1 list)
+        stream = StMap chunkMap fun (stFromList chunkUnf list)
+    result <- streamToList stream
+    assertEquals expected result
+
+testUnfoldJoin :: Int -> Int -> ((Int, Int), Int) -> IO ()
+testUnfoldJoin sizeL sizeR ((chunkL, chunkR), chunkJoin) = do
+    putStr $ "* (" ++ elementsMsg sizeL ++ ", " ++ elementsMsg sizeR ++ ") - Chunck size = " ++ show ((chunkL, chunkR), chunkJoin)
+    let left = [1..sizeL] :: [Int]
+        right = [sizeL+1..sizeL+sizeR] :: [Int]
+        expected = zip left right
+        stream = StJoin chunkJoin (stFromList chunkL left) (stFromList chunkR right)
     result <- streamToList stream
     assertEquals expected result
     
-test07 :: IO ()
-test07 = do
-    putStr "StUnfold -> StMap: 50 elements - Chunck size = (5, 5)"
-    let list = [1..50] :: [Int]
-        fun = (+5) . (*2)
-        expected = map fun list
-        stream = StMap 5 fun (stFromList 5 list)
-    result <- streamToList stream
-    assertEquals expected result
 
-test08 :: IO ()
-test08 = do
-    putStr "StUnfold -> StMap: 80 elements - Chunck size = (8, 4)"
-    let list = [1..80] :: [Int]
-        fun = (+5) . (*2)
-        expected = map fun list
-        stream = StMap 4 fun (stFromList 8 list)
-    result <- streamToList stream
-    assertEquals expected result
-
-test09 :: IO ()
-test09 = do
-    putStr "StUnfold -> StMap: 80 elements - Chunck size = (4, 8)"
-    let list = [1..80] :: [Int]
-        fun = (+5) . (*2)
-        expected = map fun list
-        stream = StMap 8 fun (stFromList 4 list)
-    result <- streamToList stream
-    assertEquals expected result
-
-test10 :: IO ()
-test10 = do
-    putStr "StUnfold -> StMap: 87 elements - Chunck size = (7, 3)"
-    let list = [1..87] :: [Int]
-        fun = (+5) . (*2)
-        expected = map fun list
-        stream = StMap 3 fun (stFromList 7 list)
-    result <- streamToList stream
-    assertEquals expected result
-
-test11 :: IO ()
-test11 = do
-    putStr "StUnfold -> StMap: 87 elements - Chunck size = (3, 7)"
-    let list = [1..87] :: [Int]
-        fun = (+5) . (*2)
-        expected = map fun list
-        stream = StMap 7 fun (stFromList 3 list)
-    result <- streamToList stream
-    assertEquals expected result
-
--- ----------------------------------------------------------------------------
-test12 :: IO ()
-test12 = do
-    putStr "StUnfold => StJoin: (Empty, Empty) - Chunck size = ((1, 1), 1)"
-    let left = [] :: [Int]
-        right = [] :: [Int]
-        expected = zip left right
-        stream = StJoin 1 (stFromList 1 left) (stFromList 1 right)
-    result <- streamToList stream
-    assertEquals expected result
-
-test13 :: IO ()
-test13 = do
-    putStr "StUnfold => StJoin: (50 elements, Empty) - Chunck size = ((1, 1), 1)"
-    let left = [1..50] :: [Int]
-        right = [] :: [Int]
-        expected = zip left right
-        stream = StJoin 1 (stFromList 1 left) (stFromList 1 right)
-    result <- streamToList stream
-    assertEquals expected result
-
-test14 :: IO ()
-test14 = do
-    putStr "StUnfold => StJoin: (Empty, 50 elements) - Chunck size = ((1, 1), 1)"
-    let left = [] :: [Int]
-        right = [51..100] :: [Int]
-        expected = zip left right
-        stream = StJoin 1 (stFromList 1 left) (stFromList 1 right)
-    result <- streamToList stream
-    assertEquals expected result
-
-test15 :: IO ()
-test15 = do
-    putStr "StUnfold => StJoin: (50 elements, 50 elements) - Chunck size = ((1, 1), 1)"
-    let left = [1..50] :: [Int]
-        right = [51..100] :: [Int]
-        expected = zip left right
-        stream = StJoin 1 (stFromList 1 left) (stFromList 1 right)
-    result <- streamToList stream
-    assertEquals expected result
-
-test16 :: IO ()
-test16 = do
-    putStr "StUnfold => StJoin: (50 elements, 50 elements) - Chunck size = ((5, 5), 10)"
-    let left = [1..50] :: [Int]
-        right = [51..100] :: [Int]
-        expected = zip left right
-        stream = StJoin 10 (stFromList 5 left) (stFromList 5 right)
-    result <- streamToList stream
-    assertEquals expected result
-
-test17 :: IO ()
-test17 = do
-    putStr "StUnfold => StJoin: (50 elements, 50 elements) - Chunck size = ((10, 10), 5)"
-    let left = [1..50] :: [Int]
-        right = [51..100] :: [Int]
-        expected = zip left right
-        stream = StJoin 5 (stFromList 10 left) (stFromList 10 right)
-    result <- streamToList stream
-    assertEquals expected result
-
-test18 :: IO ()
-test18 = do
-    putStr "StUnfold => StJoin: (50 elements, 50 elements) - Chunck size = ((5, 10), 5)"
-    let left = [1..50] :: [Int]
-        right = [51..100] :: [Int]
-        expected = zip left right
-        stream = StJoin 5 (stFromList 5 left) (stFromList 10 right)
-    result <- streamToList stream
-    assertEquals expected result
-
-test19 :: IO ()
-test19 = do
-    putStr "StUnfold => StJoin: (50 elements, 50 elements) - Chunck size = ((3, 7), 5)"
-    let left = [1..50] :: [Int]
-        right = [51..100] :: [Int]
-        expected = zip left right
-        stream = StJoin 5 (stFromList 3 left) (stFromList 7 right)
-    result <- streamToList stream
-    assertEquals expected result
-
-test20 :: IO ()
-test20 = do
-    putStr "StUnfold => StJoin: (50 elements, 50 elements) - Chunck size = ((5, 3), 7)"
-    let left = [1..50] :: [Int]
-        right = [51..100] :: [Int]
-        expected = zip left right
-        stream = StJoin 7 (stFromList 5 left) (stFromList 3 right)
-    result <- streamToList stream
-    assertEquals expected result
-
-test21 :: IO ()
-test21 = do
-    putStr "StUnfold => StJoin: (49 elements, 73 elements) - Chunck size = ((5, 3), 7)"
-    let left = [1..49] :: [Int]
-        right = [101..173] :: [Int]
-        expected = zip left right
-        stream = StJoin 7 (stFromList 5 left) (stFromList 3 right)
-    result <- streamToList stream
-    assertEquals expected result
-
--- ----------------------------------------------------------------------------
-test22 :: IO ()
-test22 = do
-    putStr "StUnfold => StConcat: (Empty, Empty) - Chunck size = ((1, 1), 1)"
-    let left = [] :: [Int]
-        right = [] :: [Int]
+testUnfoldAppend :: Int -> Int -> ((Int, Int), Int) -> IO ()
+testUnfoldAppend sizeL sizeR ((chunkL, chunkR), chunkAppend) = do
+    putStr $ "* (" ++ elementsMsg sizeL ++ ", " ++ elementsMsg sizeR ++ ") - Chunck size = " ++ show ((chunkL, chunkR), chunkAppend)
+    let left = [1..sizeL] :: [Int]
+        right = [sizeL+1..sizeL+sizeR] :: [Int]
         expected = left ++ right
-        stream = StConcat 1 (stFromList 1 left) (stFromList 1 right)
-    result <- streamToList stream
-    assertEquals expected result
-
-test23 :: IO ()
-test23 = do
-    putStr "StUnfold => StConcat: (50 elements, Empty) - Chunck size = ((1, 1), 1)"
-    let left = [1..50] :: [Int]
-        right = [] :: [Int]
-        expected = left ++ right
-        stream = StConcat 1 (stFromList 1 left) (stFromList 1 right)
-    result <- streamToList stream
-    assertEquals expected result
-
-test24 :: IO ()
-test24 = do
-    putStr "StUnfold => StConcat: (Empty, 50 elements) - Chunck size = ((1, 1), 1)"
-    let left = [] :: [Int]
-        right = [51..100] :: [Int]
-        expected = left ++ right
-        stream = StConcat 1 (stFromList 1 left) (stFromList 1 right)
-    result <- streamToList stream
-    assertEquals expected result
-
-test25 :: IO ()
-test25 = do
-    putStr "StUnfold => StConcat: (50 elements, 50 elements) - Chunck size = ((5, 5), 10)"
-    let left = [1..50] :: [Int]
-        right = [51..100] :: [Int]
-        expected = left ++ right
-        stream = StConcat 10 (stFromList 5 left) (stFromList 5 right)
-    result <- streamToList stream
-    assertEquals expected result
-
-test26 :: IO ()
-test26 = do
-    putStr "StUnfold => StConcat: (50 elements, 50 elements) - Chunck size = ((10, 10), 5)"
-    let left = [1..50] :: [Int]
-        right = [51..100] :: [Int]
-        expected = left ++ right
-        stream = StConcat 5 (stFromList 10 left) (stFromList 10 right)
-    result <- streamToList stream
-    assertEquals expected result
-
-test27 :: IO ()
-test27 = do
-    putStr "StUnfold => StConcat: (50 elements, 50 elements) - Chunck size = ((5, 10), 5)"
-    let left = [1..50] :: [Int]
-        right = [51..100] :: [Int]
-        expected = left ++ right
-        stream = StConcat 5 (stFromList 5 left) (stFromList 10 right)
-    result <- streamToList stream
-    assertEquals expected result
-
-test28 :: IO ()
-test28 = do
-    putStr "StUnfold => StConcat: (50 elements, 50 elements) - Chunck size = ((3, 7), 5)"
-    let left = [1..50] :: [Int]
-        right = [51..100] :: [Int]
-        expected = left ++ right
-        stream = StConcat 5 (stFromList 3 left) (stFromList 7 right)
-    result <- streamToList stream
-    assertEquals expected result
-
-test29 :: IO ()
-test29 = do
-    putStr "StUnfold => StConcat: (50 elements, 50 elements) - Chunck size = ((3, 7), 5)"
-    let left = [1..50] :: [Int]
-        right = [51..100] :: [Int]
-        expected = left ++ right
-        stream = StConcat 7 (stFromList 5 left) (stFromList 3 right)
+        stream = StAppend chunkAppend (stFromList chunkL left) (stFromList chunkR right)
     result <- streamToList stream
     assertEquals expected result
     
-test30 :: IO ()
-test30 = do
-    putStr "StUnfold => StConcat: (49 elements, 73 elements) - Chunck size = ((5, 3), 7)"
-    let left = [1..49] :: [Int]
-        right = [101..173] :: [Int]
-        expected = left ++ right
-        stream = StConcat 7 (stFromList 5 left) (stFromList 3 right)
-    result <- streamToList stream
-    assertEquals expected result
-
-
 
 allTests :: IO ()
 allTests = do 
-    test01 >> test02 >> test03 >> test04 >> test05
-    test06 >> test07 >> test08 >> test09 >> test10 >> test11
-    test12 >> test13 >> test14 >> test15 >> test16 >> test17 >> test18 >> test19 >> test20 >> test21
-    test22 >> test23 >> test24 >> test25 >> test26 >> test27 >> test28 >> test29 >> test30
-
+    putStrLn "StUnfold"
+    testUnfold 0 1
+    testUnfold 0 3
+    testUnfold 50 1
+    testUnfold 50 5
+    testUnfold 50 3
+    putStrLn "StUnfold -> StMap"
+    testUnfoldMap 0 (1, 1)
+    testUnfoldMap 50 (5, 5)
+    testUnfoldMap 80 (8, 4)
+    testUnfoldMap 80 (4, 8)
+    testUnfoldMap 87 (7, 3)
+    testUnfoldMap 87 (3, 7)
+    putStrLn "StUnfold => StJoin"
+    testUnfoldJoin 0 0 ((1, 1), 1)
+    testUnfoldJoin 50 0 ((1, 1), 1)
+    testUnfoldJoin 0 50 ((1, 1), 1)
+    testUnfoldJoin 50 50 ((1, 1), 1)
+    testUnfoldJoin 50 50 ((5, 5), 10)
+    testUnfoldJoin 50 50 ((10, 10), 5)
+    testUnfoldJoin 50 50 ((5, 10), 5)
+    testUnfoldJoin 50 50 ((3, 7), 5)
+    testUnfoldJoin 50 50 ((5, 3), 7)
+    testUnfoldJoin 49 73 ((5, 3), 7)
+    putStrLn "StUnfold => StAppend"
+    testUnfoldAppend 0 0 ((1, 1), 1)
+    testUnfoldAppend 50 0 ((1, 1), 1)
+    testUnfoldAppend 0 50 ((1, 1), 1)
+    testUnfoldAppend 50 50 ((5, 5), 10)
+    testUnfoldAppend 50 50 ((10, 10), 5)
+    testUnfoldAppend 50 50 ((5, 10), 5)
+    testUnfoldAppend 50 50 ((3, 7), 5)
+    testUnfoldAppend 50 50 ((5, 3), 7)
+    testUnfoldAppend 49 73 ((5, 3), 7)
+    

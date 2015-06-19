@@ -40,7 +40,7 @@ data Stream d where
     StJoin     :: Int -> Stream i1 -> Stream i2 -> Stream (i1, i2)
 --    StSplit    :: Int -> Stream i -> (Stream i, Stream i)
 
-    StConcat   :: Int -> Stream i -> Stream i -> Stream i
+    StAppend   :: Int -> Stream i -> Stream i -> Stream i
     
     StUntil    :: (c -> i -> c) -> c -> (c -> Bool) -> Stream i -> Stream i
 
@@ -193,7 +193,7 @@ execStream ec (StJoin n st1 st2) = do
                         writeQueue qo (Just (S.zip chunk1 nAcc2))
                     writeQueue qo Nothing                    
 
-execStream ec (StConcat n st1 st2) = do
+execStream ec (StAppend n st1 st2) = do
     qo <- newQueue (queueLimit ec)
     bqi <- newQueue (queueLimit ec)
     (tids1, qi1) <- execStream ec st1
