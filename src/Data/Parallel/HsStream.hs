@@ -31,6 +31,145 @@ import Control.Concurrent.Chan.Unagi.Bounded (InChan, OutChan, newChan, readChan
 {- ============================== DSL =============================== -}
 {- ================================================================== -}
 
+--------------
+-- Ideas... --
+--------------
+
+{-
+data Expr s d where
+    Unfold   :: (NFData o) => Int -> (i -> (Maybe (o, i))) -> i -> Expr s (s o)
+    
+    Map      :: (NFData o) => Int -> (i -> o) -> Expr s (s i) -> Expr s (s o)
+    Filter   :: Int -> (i -> Bool) -> Expr s (s i) -> Expr s (s i)
+    
+    Join     :: Int -> Expr s (s i1) -> Expr s (s i2) -> Expr s (s (i1, i2))
+    Split    :: Int -> Expr s (s i) -> Expr s (s i, s i)
+
+    Append   :: Int -> Expr s (s i) -> Expr s (s i) -> Expr s (s i)
+    
+    Until    :: (c -> i -> c) -> c -> (c -> Bool) -> Expr s (s i) -> Expr s (s i)    
+-}
+
+{-
+Left y Rigth haría que se repitan expresiones, y entonces se ejecutaria dos veces los split
+data Expr s d where
+    Unfold   :: (NFData o) => Int -> (i -> (Maybe (o, i))) -> i -> Expr s (s o)
+    
+    Map      :: (NFData o) => Int -> (i -> o) -> Expr s (s i) -> Expr s (s o)
+    Filter   :: Int -> (i -> Bool) -> Expr s (s i) -> Expr s (s i)
+    
+    Join     :: Int -> Expr s (s i1) -> Expr s (s i2) -> Expr s (s (i1, i2))
+    Split    :: Int -> Expr s (s i) -> Expr s (s i, s i)
+    Left     :: Expr s (s i, s i) -> Expr s (s i)
+    Rigth    :: Expr s (s i, s i) -> Expr s (s i)
+
+    Append   :: Int -> Expr s (s i) -> Expr s (s i) -> Expr s (s i)
+    
+    Until    :: (c -> i -> c) -> c -> (c -> Bool) -> Expr s (s i) -> Expr s (s i)    
+-}
+
+{-
+Esto no construye una expresion, entonces para que el data?
+data Expr s d where
+    Unfold   :: (NFData o) => Int -> (i -> (Maybe (o, i))) -> i -> Expr s (s o)
+    
+    Map      :: (NFData o) => Int -> (i -> o) -> s i -> Expr s (s o)
+    Filter   :: Int -> (i -> Bool) -> s i -> Expr s (s i)
+    
+    Join     :: Int -> s i1 -> s i2 -> Expr s (s (i1, i2))
+    Split    :: Int -> s i -> Expr s (s i, s i)
+
+    Append   :: Int -> s i -> s i -> Expr s (s i)
+    
+    Until    :: (c -> i -> c) -> c -> (c -> Bool) -> s i -> Expr s (s i)    
+
+data S d = S (Queue (Maybe (S.Seq d)))
+
+exec :: Expr S d -> IO (S d)
+exec = undefined
+-}
+{-
+Esto es lo mismo que arriba, pero más honesto, falta agregar IO a la salida
+data S d = S (Queue (Maybe (S.Seq d)))
+
+sUnfold   :: (NFData o) => Int -> (i -> (Maybe (o, i))) -> i -> S o
+sUnfold = undefined
+
+sMap      :: (NFData o) => Int -> (i -> o) -> S i -> S o
+sMap = undefined
+
+sFilter   :: Int -> (i -> Bool) -> S i -> S i
+sFilter = undefined
+
+sJoin     :: Int -> S i1 -> S i2 -> S (i1, i2)
+sJoin = undefined
+
+sSplit    :: Int -> S i -> (S i, S i)
+sSplit = undefined
+
+sAppend   :: Int -> S i -> S i -> S i
+sAppend = undefined
+
+sUntil    :: (c -> i -> c) -> c -> (c -> Bool) -> S i -> S i
+sUntil = undefined
+-}
+
+---------------------------------------------------------
+-- Interfaz de bajo nivel. Compartir variables es malo --
+---------------------------------------------------------
+
+-- Basta con un único threadId para luego encadenar el manejo de la señal (el caso interesante es el join)
+data S d = S (ThreadId, Queue (Maybe (S.Seq d)))
+
+sUnfold   :: (NFData o) => Int -> (i -> (Maybe (o, i))) -> i -> IO (S o)
+sUnfold = undefined
+
+sMap      :: (NFData o) => Int -> (i -> o) -> S i -> IO (S o)
+sMap = undefined
+
+sFilter   :: Int -> (i -> Bool) -> S i -> IO (S i)
+sFilter = undefined
+
+sJoin     :: Int -> S i1 -> S i2 -> IO (S (i1, i2))
+sJoin = undefined
+
+sSplit    :: Int -> S i -> IO (S i, S i)
+sSplit = undefined
+
+sAppend   :: Int -> S i -> S i -> IO (S i)
+sAppend = undefined
+
+sUntil    :: (c -> i -> c) -> c -> (c -> Bool) -> S i -> IO (S i)
+sUntil = undefined
+
+--------------------------------------------------------------
+-- Interfaz de alto nivel. Evita que se compartan variables --
+--------------------------------------------------------------
+
+data Expr s d where
+    Unfold   :: (NFData o) => Int -> (i -> (Maybe (o, i))) -> i -> Expr s (s o)
+    
+    Map      :: (NFData o) => Int -> (i -> o) -> Expr s (s i) -> Expr s (s o)
+    Filter   :: Int -> (i -> Bool) -> Expr s (s i) -> Expr s (s i)
+    
+    Join     :: Int -> Expr s (s i1) -> Expr s (s i2) -> Expr s (s (i1, i2))
+    Split    :: Int -> Expr s (s i) -> Expr s (s i, s i)
+
+    Append   :: Int -> Expr s (s i) -> Expr s (s i) -> Expr s (s i)
+    
+    Until    :: (c -> i -> c) -> c -> (c -> Bool) -> Expr s (s i) -> Expr s (s i)    
+
+-- El ejecutor de esto en general va a usar al de bajo nivel, pero debe tener la inteligencia para
+-- detectar un join y procesar distinto el lado izquierdo al derecho. El izq. debe generar llamadas 
+-- recursivas hasta llegar a un split, devolviendo el S d, el derecho debe generar llamadas recursivas
+-- pasando por parámetro ese S d, el que se debe usar para el split, y luego seguir la recursión.
+-- Está claro que esta es la parte complicada... si es que es posible. CHAN
+
+
+-----------
+-- Viejo --
+-----------
+
 data Stream d where
     StUnfold   :: (NFData o) => Int -> (i -> (Maybe (o, i))) -> i -> Stream o
     
