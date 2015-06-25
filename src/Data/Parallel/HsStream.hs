@@ -26,93 +26,9 @@ import Prelude hiding (id, mapM, mapM_, take)
 import Control.Concurrent.Chan.Unagi.Bounded (InChan, OutChan, newChan, readChan, writeChan, tryReadChan, tryRead)
 
 
-
 {- ================================================================== -}
 {- ============================== DSL =============================== -}
 {- ================================================================== -}
-
---------------
--- Ideas... --
---------------
-
-{-
-data Expr s d where
-    Unfold   :: (NFData o) => Int -> (i -> (Maybe (o, i))) -> i -> Expr s (s o)
-    
-    Map      :: (NFData o) => Int -> (i -> o) -> Expr s (s i) -> Expr s (s o)
-    Filter   :: Int -> (i -> Bool) -> Expr s (s i) -> Expr s (s i)
-    
-    Join     :: Int -> Expr s (s i1) -> Expr s (s i2) -> Expr s (s (i1, i2))
-    Split    :: Int -> Expr s (s i) -> Expr s (s i, s i)
-
-    Append   :: Int -> Expr s (s i) -> Expr s (s i) -> Expr s (s i)
-    
-    Until    :: (c -> i -> c) -> c -> (c -> Bool) -> Expr s (s i) -> Expr s (s i)    
--}
-
-{-
-Left y Rigth haría que se repitan expresiones, y entonces se ejecutaria dos veces los split
-data Expr s d where
-    Unfold   :: (NFData o) => Int -> (i -> (Maybe (o, i))) -> i -> Expr s (s o)
-    
-    Map      :: (NFData o) => Int -> (i -> o) -> Expr s (s i) -> Expr s (s o)
-    Filter   :: Int -> (i -> Bool) -> Expr s (s i) -> Expr s (s i)
-    
-    Join     :: Int -> Expr s (s i1) -> Expr s (s i2) -> Expr s (s (i1, i2))
-    Split    :: Int -> Expr s (s i) -> Expr s (s i, s i)
-    Left     :: Expr s (s i, s i) -> Expr s (s i)
-    Rigth    :: Expr s (s i, s i) -> Expr s (s i)
-
-    Append   :: Int -> Expr s (s i) -> Expr s (s i) -> Expr s (s i)
-    
-    Until    :: (c -> i -> c) -> c -> (c -> Bool) -> Expr s (s i) -> Expr s (s i)    
--}
-
-{-
-Esto no construye una expresion, entonces para que el data?
-data Expr s d where
-    Unfold   :: (NFData o) => Int -> (i -> (Maybe (o, i))) -> i -> Expr s (s o)
-    
-    Map      :: (NFData o) => Int -> (i -> o) -> s i -> Expr s (s o)
-    Filter   :: Int -> (i -> Bool) -> s i -> Expr s (s i)
-    
-    Join     :: Int -> s i1 -> s i2 -> Expr s (s (i1, i2))
-    Split    :: Int -> s i -> Expr s (s i, s i)
-
-    Append   :: Int -> s i -> s i -> Expr s (s i)
-    
-    Until    :: (c -> i -> c) -> c -> (c -> Bool) -> s i -> Expr s (s i)    
-
-data S d = S (Queue (Maybe (S.Seq d)))
-
-exec :: Expr S d -> IO (S d)
-exec = undefined
--}
-{-
-Esto es lo mismo que arriba, pero más honesto, falta agregar IO a la salida
-data S d = S (Queue (Maybe (S.Seq d)))
-
-sUnfold   :: (NFData o) => Int -> (i -> (Maybe (o, i))) -> i -> S o
-sUnfold = undefined
-
-sMap      :: (NFData o) => Int -> (i -> o) -> S i -> S o
-sMap = undefined
-
-sFilter   :: Int -> (i -> Bool) -> S i -> S i
-sFilter = undefined
-
-sJoin     :: Int -> S i1 -> S i2 -> S (i1, i2)
-sJoin = undefined
-
-sSplit    :: Int -> S i -> (S i, S i)
-sSplit = undefined
-
-sAppend   :: Int -> S i -> S i -> S i
-sAppend = undefined
-
-sUntil    :: (c -> i -> c) -> c -> (c -> Bool) -> S i -> S i
-sUntil = undefined
--}
 
 ---------------------------------------------------------
 -- Interfaz de bajo nivel. Compartir variables es malo --
@@ -251,7 +167,7 @@ sUntil ec f z until (S tids qi) = do
 --------------------------------------------------------------
 -- Interfaz de alto nivel. Evita que se compartan variables --
 --------------------------------------------------------------
-
+{-
 data Expr s d where
     Unfold   :: (NFData o) => Int -> (i -> (Maybe (o, i))) -> i -> Expr s (s o)
     
@@ -270,6 +186,44 @@ data Expr s d where
 -- recursivas hasta llegar a un split, devolviendo el S d, el derecho debe generar llamadas recursivas
 -- pasando por parámetro ese S d, el que se debe usar para el split, y luego seguir la recursión.
 -- Está claro que esta es la parte complicada... si es que es posible. CHAN
+-}
+
+data Stream d where
+    StUnfold   :: (NFData o) => Int -> (i -> (Maybe (o, i))) -> i -> Stream o
+    
+    StMap      :: (NFData o) => Int -> (i -> o) -> Stream i -> Stream o
+    StFilter   :: Int -> (i -> Bool) -> Stream i -> Stream i
+    
+    StSplit    :: Int -> (Stream a -> Stream b1) -> (Stream a -> Stream b2) -> Stream a -> Stream (b1, b2)
+
+    StAppend   :: Int -> Stream i -> Stream i -> Stream i
+    
+    StUntil    :: (c -> i -> c) -> c -> (c -> Bool) -> Stream i -> Stream i
+
+execStream :: IOEC -> Stream i -> IO (S i)
+
+execStream ec (StUnfold n gen i) = sUnfold ec n gen i
+
+execStream ec (StMap n f st) = sMap ec n f =<< execStream ec st
+
+execStream ec (StSplit n f1 f2 st) = do
+    -- El st se está ejecutando dos veces
+    s1 <- execStream ec $ f1 st
+    s2 <- execStream ec $ f2 st
+    sJoin ec n s1 s2
+    -- Estaría bueno hacer:
+    -- s <- execStream ec st
+    -- (s1, s2) <- sSplit n s
+    -- s1' <- execStream ec $ f1 (StWrap s1)
+    -- s2' <- execStream ec $ f2 (StWrap s2)
+    -- sJoin ec n s1' s2'
+
+execStream ec (StAppend n st1 st2) = do
+    s1 <- execStream ec st1
+    s2 <- execStream ec st2
+    sAppend ec n s1 s2
+
+execStream ec (StUntil f z until st) = sUntil ec f z until =<< execStream ec st
 
 {- ================================================================== -}
 {- ========================= Util Functions ========================= -}
