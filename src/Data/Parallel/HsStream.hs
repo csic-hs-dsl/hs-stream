@@ -37,6 +37,9 @@ import Control.Concurrent.Chan.Unagi.Bounded (InChan, OutChan, newChan, readChan
 -- Basta con un único threadId para luego encadenar el manejo de la señal (el caso interesante es el join)
 data S d = S [ThreadId] (Queue (Maybe (S.Seq d)))
 
+sWrap :: IOEC -> S o -> IO (S o)
+sWrap ec s = return s
+
 sUnfold :: (NFData o) => IOEC -> Int -> (i -> (Maybe (o, i))) -> i -> IO (S o)
 sUnfold ec n gen i = do
     qo <- newQueue (queueLimit ec)
@@ -188,35 +191,34 @@ data Expr s d where
 -- Está claro que esta es la parte complicada... si es que es posible. CHAN
 -}
 
-data Stream d where
-    StUnfold   :: (NFData o) => Int -> (i -> (Maybe (o, i))) -> i -> Stream o
-    
-    StMap      :: (NFData o) => Int -> (i -> o) -> Stream i -> Stream o
-    StFilter   :: Int -> (i -> Bool) -> Stream i -> Stream i
-    
-    StSplit    :: Int -> (Stream a -> Stream b1) -> (Stream a -> Stream b2) -> Stream a -> Stream (b1, b2)
+data Stream s d where
+    StWrap     :: s o -> Stream s o
 
-    StAppend   :: Int -> Stream i -> Stream i -> Stream i
+    StUnfold   :: (NFData o) => Int -> (i -> (Maybe (o, i))) -> i -> Stream s o
     
-    StUntil    :: (c -> i -> c) -> c -> (c -> Bool) -> Stream i -> Stream i
+    StMap      :: (NFData o) => Int -> (i -> o) -> Stream s i -> Stream s o
+    StFilter   :: Int -> (i -> Bool) -> Stream s i -> Stream s i
+    
+    StSplit    :: Int -> (Stream s a -> Stream s b1) -> (Stream s a -> Stream s b2) -> Stream s a -> Stream s (b1, b2)
 
-execStream :: IOEC -> Stream i -> IO (S i)
+    StAppend   :: Int -> Stream s i -> Stream s i -> Stream s i
+    
+    StUntil    :: (c -> i -> c) -> c -> (c -> Bool) -> Stream s i -> Stream s i
+
+execStream :: IOEC -> Stream S i -> IO (S i)
+
+execStream ec (StWrap s) = sWrap ec s
 
 execStream ec (StUnfold n gen i) = sUnfold ec n gen i
 
 execStream ec (StMap n f st) = sMap ec n f =<< execStream ec st
 
 execStream ec (StSplit n f1 f2 st) = do
-    -- El st se está ejecutando dos veces
-    s1 <- execStream ec $ f1 st
-    s2 <- execStream ec $ f2 st
-    sJoin ec n s1 s2
-    -- Estaría bueno hacer:
-    -- s <- execStream ec st
-    -- (s1, s2) <- sSplit n s
-    -- s1' <- execStream ec $ f1 (StWrap s1)
-    -- s2' <- execStream ec $ f2 (StWrap s2)
-    -- sJoin ec n s1' s2'
+    s <- execStream ec st
+    (s1, s2) <- sSplit ec n s
+    s1' <- execStream ec $ f1 (StWrap s1)
+    s2' <- execStream ec $ f2 (StWrap s2)
+    sJoin ec n s1' s2'
 
 execStream ec (StAppend n st1 st2) = do
     s1 <- execStream ec st1
@@ -230,7 +232,7 @@ execStream ec (StUntil f z until st) = sUntil ec f z until =<< execStream ec st
 {- ================================================================== -}
 
 -- | Creates a Stream from a List. Requires 'NFData' of its elements in order to fully evaluate them.
-stFromList :: (NFData a) => Int -> [a] -> Stream a
+stFromList :: (NFData a) => Int -> [a] -> Stream s a
 stFromList dim l = StUnfold dim go l
     where
         go [] = Nothing
