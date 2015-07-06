@@ -110,13 +110,32 @@ sJoin ec n (S tids1 qi1) (S tids2 qi2) = do
                         writeQueue qo (Just (S.zip chunk1 nAcc2))
                     writeQueue qo Nothing  
 
-sSplit    :: IOEC -> Int -> S i -> IO (S i, S i)
-sSplit = undefined
+sSplit :: IOEC -> Int -> S i -> IO (S i, S i)
+sSplit ec n (S tids qi) = do
+    qo1 <- newQueue (queueLimit ec)
+    qo2 <- newQueue (queueLimit ec)
+    tid <- forkIO $ recc qi qo1 qo2 S.empty
+    return $ (S (tid : tids) qo1, S (tid : tids) qo2)
+    where 
+        recc qi qo1 qo2 acc = do
+        (mChunk, nAcc) <- readChunk acc n qi
+        case mChunk of 
+            Just chunk -> do 
+                -- esto no esta del todo bien, una qo puede bloquear a la otra
+                writeQueue qo1 (Just chunk)
+                writeQueue qo2 (Just chunk)
+                recc qi qo1 qo2 nAcc
+            Nothing -> do
+                when (not $ S.null nAcc) $ do
+                    -- esto no esta del todo bien, una qo puede bloquear a la otra
+                    writeQueue qo1 (Just nAcc)
+                    writeQueue qo2 (Just nAcc)
+                writeQueue qo1 Nothing
+                writeQueue qo2 Nothing
 
-sAppend   :: IOEC -> Int -> S i -> S i -> IO (S i)
+sAppend :: IOEC -> Int -> S i -> S i -> IO (S i)
 sAppend ec n (S tids1 qi1) (S tids2 qi2) = do
     qo <- newQueue (queueLimit ec)
-    bqi <- newQueue (queueLimit ec)
     tid <- forkIO $ recc qi1 qi2 qo
     return $ S (tid : (tids1 ++ tids2)) qo
     where
