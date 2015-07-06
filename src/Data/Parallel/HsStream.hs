@@ -189,26 +189,6 @@ sUntil ec f z until (S tids qi) = do
 --------------------------------------------------------------
 -- Interfaz de alto nivel. Evita que se compartan variables --
 --------------------------------------------------------------
-{-
-data Expr s d where
-    Unfold   :: (NFData o) => Int -> (i -> (Maybe (o, i))) -> i -> Expr s (s o)
-    
-    Map      :: (NFData o) => Int -> (i -> o) -> Expr s (s i) -> Expr s (s o)
-    Filter   :: Int -> (i -> Bool) -> Expr s (s i) -> Expr s (s i)
-    
-    Join     :: Int -> Expr s (s i1) -> Expr s (s i2) -> Expr s (s (i1, i2))
-    Split    :: Int -> Expr s (s i) -> Expr s (s i, s i)
-
-    Append   :: Int -> Expr s (s i) -> Expr s (s i) -> Expr s (s i)
-    
-    Until    :: (c -> i -> c) -> c -> (c -> Bool) -> Expr s (s i) -> Expr s (s i)    
-
--- El ejecutor de esto en general va a usar al de bajo nivel, pero debe tener la inteligencia para
--- detectar un join y procesar distinto el lado izquierdo al derecho. El izq. debe generar llamadas 
--- recursivas hasta llegar a un split, devolviendo el S d, el derecho debe generar llamadas recursivas
--- pasando por parámetro ese S d, el que se debe usar para el split, y luego seguir la recursión.
--- Está claro que esta es la parte complicada... si es que es posible. CHAN
--}
 
 data Stream s d where
     StWrap     :: s o -> Stream s o
