@@ -73,9 +73,9 @@ testUnfoldMap size (chunkUnf, chunkMap) = do
     result <- streamToList stream
     assertEquals expected result
 
-testUnfoldSplit :: Int -> Int -> Int -> IO ()
-testUnfoldSplit size chunkUnf chunkSplit = do
---    putStr $ "* (" ++ elementsMsg sizeL ++ ", " ++ elementsMsg sizeR ++ ") - Chunck size = " ++ show ((chunkL, chunkR), chunkSplit)
+testUnfoldSplit :: Int -> (Int, Int) -> IO ()
+testUnfoldSplit size (chunkUnf, chunkSplit) = do
+    putStr $ "* (" ++ elementsMsg size ++ ") - Chunck size = " ++ show (chunkUnf, chunkSplit)
     let list = [1..size] :: [Int]
         expected = zip list list
         stream = StSplit chunkSplit (id) (id) (stFromList chunkUnf list)
@@ -122,10 +122,10 @@ allTests = do
     testUnfoldMap 87 (7, 3)
     testUnfoldMap 87 (3, 7)
     putStrLn "StUnfold => StSplit"
-    testUnfoldSplit 50 1 1
-    testUnfoldSplit 50 3 3
-    testUnfoldSplit 50 3 7
-    testUnfoldSplit 50 7 3
+    testUnfoldSplit 50 (1, 1)
+    testUnfoldSplit 50 (3, 3)
+    testUnfoldSplit 50 (3, 7)
+    testUnfoldSplit 50 (7, 3)
     putStrLn "StUnfold => StAppend"
     testUnfoldAppend 0 0 ((1, 1), 1)
     testUnfoldAppend 50 0 ((1, 1), 1)
