@@ -35,7 +35,7 @@ import Control.Concurrent.Chan.Unagi.Bounded (InChan, OutChan, newChan, readChan
 ---------------------------------------------------------
 
 -- Basta con un único threadId para luego encadenar el manejo de la señal (el caso interesante es el join)
-data S d = S [ThreadId] (Queue (Maybe (S.Seq d)))
+data S d = S ThreadId (Queue (Maybe (S.Seq d)))
 
 sWrap :: IOEC -> S o -> IO (S o)
 sWrap ec s = return s
@@ -44,7 +44,7 @@ sUnfold :: (NFData o) => IOEC -> Int -> (i -> (Maybe (o, i))) -> i -> IO (S o)
 sUnfold ec n gen i = do
     qo <- newQueue (queueLimit ec)
     tid <- forkIO $ recc qo i
-    return $ S [tid] qo
+    return $ S tid qo
     where 
         recc qo i = do
             (elems, i') <- genElems n S.empty i
@@ -66,7 +66,7 @@ sMap :: (NFData o) => IOEC -> Int -> (i -> o) -> S i -> IO (S o)
 sMap ec n f (S tids qi) = do
     qo <- newQueue (queueLimit ec)
     tid <- forkIO $ recc qi qo S.empty
-    return $ S (tid : tids) qo
+    return $ S tid qo
     where 
         recc qi qo acc = do
             (mChunk, nAcc) <- readChunk acc n qi
@@ -88,7 +88,7 @@ sJoin :: IOEC -> Int -> S i1 -> S i2 -> IO (S (i1, i2))
 sJoin ec n (S tids1 qi1) (S tids2 qi2) = do
     qo <- newQueue (queueLimit ec)
     tid <- forkIO $ recc qi1 qi2 qo S.empty S.empty
-    return $ S (tid : (tids1 ++ tids2)) qo
+    return $ S tid qo
     where 
         recc qi1 qi2 qo acc1 acc2 = do
             (mChunk1, nAcc1) <- readChunk acc1 n qi1
@@ -115,7 +115,7 @@ sSplit ec n (S tids qi) = do
     qo1 <- newQueue (queueLimit ec)
     qo2 <- newQueue (queueLimit ec)
     tid <- forkIO $ recc qi qo1 qo2 S.empty
-    return $ (S (tid : tids) qo1, S (tid : tids) qo2)
+    return $ (S tid qo1, S tid qo2)
     where 
         recc qi qo1 qo2 acc = do
         (mChunk, nAcc) <- readChunk acc n qi
@@ -137,7 +137,7 @@ sAppend :: IOEC -> Int -> S i -> S i -> IO (S i)
 sAppend ec n (S tids1 qi1) (S tids2 qi2) = do
     qo <- newQueue (queueLimit ec)
     tid <- forkIO $ recc qi1 qi2 qo
-    return $ S (tid : (tids1 ++ tids2)) qo
+    return $ S tid qo
     where
         recc_ qi qo acc = do
             (mChunk, nAcc) <- readChunk acc n qi
@@ -154,12 +154,12 @@ sAppend ec n (S tids1 qi1) (S tids2 qi2) = do
             writeQueue qo Nothing    
 
 sUntil :: IOEC -> (c -> i -> c) -> c -> (c -> Bool) -> S i -> IO (S i)
-sUntil ec f z until (S tids qi) = do
+sUntil ec f z until (S tid' qi) = do
     qo <- newQueue (queueLimit ec)
-    tid <- forkIO $ recc qi qo z tids
-    return $ S (tid : tids) qo
+    tid <- forkIO $ recc qi qo z tid'
+    return $ S tid qo
     where 
-        recc qi qo acc tids = do
+        recc qi qo acc tid' = do
             i <- readQueue qi
             case i of
                 Just vi -> do
@@ -178,11 +178,11 @@ sUntil ec f z until (S tids qi) = do
                         then do
                             writeQueue qo (Just $ S.take (pos + 1) vi)
                             -- Matar todo
-                            mapM killThread tids
+                            killThread tid'
                             writeQueue qo Nothing
                         else do
                             writeQueue qo (Just vi)
-                            recc qi qo acc' tids
+                            recc qi qo acc' tid'
                 Nothing -> do
                     writeQueue qo Nothing
 
