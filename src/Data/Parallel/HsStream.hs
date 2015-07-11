@@ -82,7 +82,21 @@ sMap ec n f (S tids qi) = do
                     writeQueue qo Nothing
 
 sFilter   :: IOEC -> Int -> (i -> Bool) -> S i -> IO (S i)
-sFilter = undefined
+sFilter ec n cond (S tids qi) = do
+    qo <- newQueue (queueLimit ec)
+    tid <- forkIO $ recc qi qo S.empty
+    return $ S (tid : tids) qo
+    where 
+        recc qi qo acc = do
+            (mChunk, nAcc) <- readChunkFilter cond acc n qi
+            case mChunk of 
+                Just chunk -> do 
+                    writeQueue qo (Just chunk)
+                    recc qi qo nAcc
+                Nothing -> do
+                    when (not $ S.null nAcc) $ do
+                        writeQueue qo (Just nAcc)
+                    writeQueue qo Nothing
 
 sJoin :: IOEC -> Int -> S i1 -> S i2 -> IO (S (i1, i2))
 sJoin ec n (S tids1 qi1) (S tids2 qi2) = do
@@ -212,6 +226,8 @@ execStream ec (StUnfold n gen i) = sUnfold ec n gen i
 
 execStream ec (StMap n f st) = sMap ec n f =<< execStream ec st
 
+execStream ec (StFilter n c st) = sFilter ec n c =<< execStream ec st
+
 execStream ec (StSplit n f1 f2 st) = do
     s <- execStream ec st
     (s1, s2) <- sSplit ec n s
@@ -280,8 +296,8 @@ makeChunk acc n
         len = S.length acc
         (pre, post) = S.splitAt n acc
 
-readChunk :: S.Seq i -> Int -> Queue (Maybe (S.Seq i)) -> IO (Maybe (S.Seq i), S.Seq i)
-readChunk acc n qi =
+readChunkFilter :: (i -> Bool) -> S.Seq i -> Int -> Queue (Maybe (S.Seq i)) -> IO (Maybe (S.Seq i), S.Seq i)
+readChunkFilter cond acc n qi =
     if (S.length acc >= n) then do
         let (chunk, nAcc) = S.splitAt n acc
         return (Just chunk, nAcc)
@@ -289,9 +305,11 @@ readChunk acc n qi =
         res <- readQueue qi
         case res of 
             Just vi -> do 
-                let (mChunk, nacc) = makeChunk (acc S.>< vi) n
+                let (mChunk, nacc) = makeChunk (acc S.>< (S.filter cond vi)) n
                 case mChunk of
                     Just chunk -> return (Just chunk, nacc)
-                    Nothing -> readChunk nacc n qi
+                    Nothing -> readChunkFilter cond nacc n qi
             Nothing -> return (Nothing, acc)
 
+readChunk :: S.Seq i -> Int -> Queue (Maybe (S.Seq i)) -> IO (Maybe (S.Seq i), S.Seq i)
+readChunk = readChunkFilter (const True)
