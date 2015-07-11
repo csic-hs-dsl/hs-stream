@@ -105,6 +105,16 @@ testUnfoldUntil size chunkUnf = do
     result <- streamToList stream
     assertEquals expected result
         
+testUnfoldFilter :: Int -> (Int, Int) -> IO ()
+testUnfoldFilter size (chunkUnf, chunkFilter) = do
+    putStr $ "* (" ++ elementsMsg size ++ ") - Chunck size = " ++ show (chunkUnf, chunkFilter)
+    let list = [1..size] :: [Int]
+        cond = (/= 0) . (`mod` 5)
+        expected = filter cond list
+        stream = StFilter chunkFilter cond (stFromList chunkUnf list)
+    result <- streamToList stream
+    assertEquals expected result
+
 
 allTests :: IO ()
 allTests = do 
@@ -143,3 +153,12 @@ allTests = do
     testUnfoldUntil 80 4
     testUnfoldUntil 87 7
     testUnfoldUntil 87 3
+    putStrLn "StUnfold -> StFilter"
+    testUnfoldFilter 0 (1, 1)
+    testUnfoldFilter 50 (5, 5)
+    testUnfoldFilter 80 (8, 4)
+    testUnfoldFilter 80 (4, 8)
+    testUnfoldFilter 87 (7, 3)
+    testUnfoldFilter 87 (3, 7)
+
+
