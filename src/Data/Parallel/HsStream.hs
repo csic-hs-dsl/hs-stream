@@ -139,7 +139,9 @@ sSplit ec n (S tid qi) = do
     where 
         exceptionHandler mytid n = 
             catch 
-                (threadDelay 100000) 
+                (do
+                    threadDelay 1000000
+                    exceptionHandler mytid n) 
                 (\ThreadKilled -> do
                     if (n == 0) 
                         then exceptionHandler mytid 1
