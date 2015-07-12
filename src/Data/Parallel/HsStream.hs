@@ -12,15 +12,16 @@ module Data.Parallel.HsStream where
 
 
 import qualified Data.Sequence as S
-import Data.Foldable (mapM_, foldlM)
+import Data.Foldable (mapM_, foldlM, foldl)
 import Data.Maybe (isJust, fromJust)
 import Data.Traversable (Traversable, mapM)
-import Control.Concurrent (forkIO, ThreadId, killThread)
+import Control.Concurrent (forkIO, ThreadId, killThread, threadDelay)
 import Control.Concurrent.MVar (MVar, newEmptyMVar, putMVar, readMVar)
 import Control.DeepSeq (NFData, rnf)
 import Control.Exception (evaluate)
+import Control.Exception.Base (catch, AsyncException(ThreadKilled))
 import Control.Monad (liftM, when)
-import Prelude hiding (id, mapM, mapM_, take)
+import Prelude hiding (id, mapM, mapM_, take, foldl)
 --import Prelude (Bool, Either, Int, Maybe(Just, Nothing), ($), Show, Read, Eq, Ord, (*), Monad)
 
 import Control.Concurrent.Chan.Unagi.Bounded (InChan, OutChan, newChan, readChan, writeChan, tryReadChan, tryRead)
@@ -33,6 +34,10 @@ import Control.Concurrent.Chan.Unagi.Bounded (InChan, OutChan, newChan, readChan
 ---------------------------------------------------------
 -- Interfaz de bajo nivel. Compartir variables es malo --
 ---------------------------------------------------------
+
+deathKill pids io = catch io (\ThreadKilled -> do
+    putStrLn "deathKill"
+    mapM_ killThread pids)
 
 -- Basta con un único threadId para luego encadenar el manejo de la señal (el caso interesante es el join)
 data S d = S ThreadId (Queue (Maybe (S.Seq d)))
@@ -63,10 +68,10 @@ sUnfold ec n gen i = do
                 Nothing -> return (seq, Nothing)
 
 sMap :: (NFData o) => IOEC -> Int -> (i -> o) -> S i -> IO (S o)
-sMap ec n f (S tids qi) = do
+sMap ec n f (S tid qi) = do
     qo <- newQueue (queueLimit ec)
-    tid <- forkIO $ recc qi qo S.empty
-    return $ S tid qo
+    mytid <- forkIO $ deathKill [tid] $ recc qi qo S.empty
+    return $ S mytid qo
     where 
         recc qi qo acc = do
             (mChunk, nAcc) <- readChunk acc n qi
@@ -82,10 +87,10 @@ sMap ec n f (S tids qi) = do
                     writeQueue qo Nothing
 
 sFilter   :: IOEC -> Int -> (i -> Bool) -> S i -> IO (S i)
-sFilter ec n cond (S tids qi) = do
+sFilter ec n cond (S tid qi) = do
     qo <- newQueue (queueLimit ec)
-    tid <- forkIO $ recc qi qo S.empty
-    return $ S (tid : tids) qo
+    mytid <- forkIO $ deathKill [tid] $ recc qi qo S.empty
+    return $ S mytid qo
     where 
         recc qi qo acc = do
             (mChunk, nAcc) <- readChunkFilter cond acc n qi
@@ -99,10 +104,10 @@ sFilter ec n cond (S tids qi) = do
                     writeQueue qo Nothing
 
 sJoin :: IOEC -> Int -> S i1 -> S i2 -> IO (S (i1, i2))
-sJoin ec n (S tids1 qi1) (S tids2 qi2) = do
+sJoin ec n (S tid1 qi1) (S tid2 qi2) = do
     qo <- newQueue (queueLimit ec)
-    tid <- forkIO $ recc qi1 qi2 qo S.empty S.empty
-    return $ S tid qo
+    mytid <- forkIO $ deathKill [tid1, tid2] $ recc qi1 qi2 qo S.empty S.empty
+    return $ S mytid qo
     where 
         recc qi1 qi2 qo acc1 acc2 = do
             (mChunk1, nAcc1) <- readChunk acc1 n qi1
@@ -125,12 +130,21 @@ sJoin ec n (S tids1 qi1) (S tids2 qi2) = do
                     writeQueue qo Nothing  
 
 sSplit :: IOEC -> Int -> S i -> IO (S i, S i)
-sSplit ec n (S tids qi) = do
+sSplit ec n (S tid qi) = do
     qo1 <- newQueue (queueLimit ec)
     qo2 <- newQueue (queueLimit ec)
-    tid <- forkIO $ recc qi qo1 qo2 S.empty
-    return $ (S tid qo1, S tid qo2)
+    mytid <- forkIO $ deathKill [tid] $ recc qi qo1 qo2 S.empty
+    myFakeTid <- forkIO $ exceptionHandler mytid 0
+    return $ (S myFakeTid qo1, S myFakeTid qo2)
     where 
+        exceptionHandler mytid n = 
+            catch 
+                (threadDelay 100000) 
+                (\ThreadKilled -> do
+                    if (n == 0) 
+                        then exceptionHandler mytid 1
+                        else killThread mytid)
+            
         recc qi qo1 qo2 acc = do
         (mChunk, nAcc) <- readChunk acc n qi
         case mChunk of 
@@ -148,10 +162,10 @@ sSplit ec n (S tids qi) = do
                 writeQueue qo2 Nothing
 
 sAppend :: IOEC -> Int -> S i -> S i -> IO (S i)
-sAppend ec n (S tids1 qi1) (S tids2 qi2) = do
+sAppend ec n (S tid1 qi1) (S tid2 qi2) = do
     qo <- newQueue (queueLimit ec)
-    tid <- forkIO $ recc qi1 qi2 qo
-    return $ S tid qo
+    mytid <- forkIO $ deathKill [tid1, tid2] $ recc qi1 qi2 qo
+    return $ S mytid qo
     where
         recc_ qi qo acc = do
             (mChunk, nAcc) <- readChunk acc n qi
@@ -168,35 +182,33 @@ sAppend ec n (S tids1 qi1) (S tids2 qi2) = do
             writeQueue qo Nothing    
 
 sUntil :: IOEC -> (c -> i -> c) -> c -> (c -> Bool) -> S i -> IO (S i)
-sUntil ec f z until (S tid' qi) = do
+sUntil ec f z until (S tid qi) = do
     qo <- newQueue (queueLimit ec)
-    tid <- forkIO $ recc qi qo z tid'
-    return $ S tid qo
+    mytid <- forkIO $ deathKill [tid] $ recc qi qo z tid
+    return $ S mytid qo
     where 
-        recc qi qo acc tid' = do
+        recc qi qo acc tid = do
             i <- readQueue qi
             case i of
                 Just vi -> do
-                    (acc', pos, stop) <- 
-                        foldlM (\(a, p, cond) v -> 
-                            do -- esto no esta muy bien ya que recorre todo el arreglo
-                                if cond
-                                    then do
-                                        return (a, p, cond)
-                                    else do
-                                        a' <- return $ f a v
-                                        cond' <- return $ until a'
-                                        return (a', p + 1, cond')
+                    let 
+                        (acc', pos, stop) = foldl (\(a, p, cond) v -> 
+                            -- esto no esta muy bien ya que recorre todo el arreglo
+                            if cond
+                                then (a, p, cond)
+                                else let a' = f a v
+                                         cond' = until a'
+                                      in (a', if cond' then p else p + 1, cond')
                             ) (acc, 0, False) vi
                     if stop
                         then do
                             writeQueue qo (Just $ S.take (pos + 1) vi)
                             -- Matar todo
-                            killThread tid'
+                            killThread tid
                             writeQueue qo Nothing
                         else do
                             writeQueue qo (Just vi)
-                            recc qi qo acc' tid'
+                            recc qi qo acc' tid
                 Nothing -> do
                     writeQueue qo Nothing
 

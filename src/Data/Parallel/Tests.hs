@@ -95,10 +95,10 @@ testUnfoldAppend sizeL sizeR ((chunkL, chunkR), chunkAppend) = do
 testUnfoldUntil :: Int -> Int -> IO ()
 testUnfoldUntil size chunkUnf = do
     putStr $ "* (" ++ elementsMsg size ++ ") - Chunck size = " ++ show chunkUnf
-    let list = [1..size] :: [Int]
+    let list = [1..] :: [Int]
         cant = 20
         fun c _ = c + 1
-        cond c = c == cant - 1
+        cond = (== cant)
         z = 0
         expected = take cant list
         stream = StUntil fun z cond (stFromList chunkUnf list)
@@ -115,6 +115,17 @@ testUnfoldFilter size (chunkUnf, chunkFilter) = do
     result <- streamToList stream
     assertEquals expected result
 
+testUnfoldSplitUntil1 :: Int -> (Int, Int) -> IO ()
+testUnfoldSplitUntil1 size (chunkUnf, chunkSplit) = do
+    putStr $ "* (" ++ elementsMsg size ++ ") - Chunck size = " ++ show (chunkUnf, chunkSplit)
+    let list = [1..] :: [Int]
+        cant = 5
+        fun c _ = c + 1
+        cond = (== cant)
+        expected = zip list (take cant list)
+        stream = StSplit chunkSplit (id) (StUntil fun 0 cond) (stFromList chunkUnf list)
+    result <- streamToList stream
+    assertEquals expected result
 
 allTests :: IO ()
 allTests = do 
@@ -148,6 +159,7 @@ allTests = do
     testUnfoldAppend 49 73 ((5, 3), 7)
     putStrLn "StUnfold -> StUntil"
     testUnfoldUntil 0 1
+    testUnfoldUntil 100 1
     testUnfoldUntil 50 5
     testUnfoldUntil 80 8
     testUnfoldUntil 80 4
@@ -160,5 +172,10 @@ allTests = do
     testUnfoldFilter 80 (4, 8)
     testUnfoldFilter 87 (7, 3)
     testUnfoldFilter 87 (3, 7)
+    putStrLn "StUnfold -> StSplit -> StUntil"    
+    testUnfoldSplitUntil1 50 (1, 1)
+    testUnfoldSplitUntil1 50 (3, 3)
+    testUnfoldSplitUntil1 50 (3, 7)
+    testUnfoldSplitUntil1 50 (7, 3)
 
 
