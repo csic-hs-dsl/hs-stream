@@ -133,6 +133,7 @@ sJoin ec n (S tid1 qi1) (S tid2 qi2) = do
 
 sSplit :: IOEC -> Int -> S i -> IO (S i, S i)
 sSplit ec n (S tid qi) = do
+    -- Estas colas deberían ser infinitas
     qo1 <- newQueue (queueLimit ec)
     qo2 <- newQueue (queueLimit ec)
     mytid <- forkIO $ deathKill [tid] $ recc qi qo1 qo2 S.empty
