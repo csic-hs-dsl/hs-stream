@@ -73,6 +73,15 @@ testUnfoldMap size (chunkUnf, chunkMap) = do
     result <- streamToList stream
     assertEquals expected result
 
+testUnfoldJoin :: Int -> (Int, Int, Int) -> IO ()
+testUnfoldJoin size (chunkUnf1, chunkUnf2, chunkJoin) = do
+    putStr $ "* (" ++ elementsMsg size ++ ") - Chunck size = " ++ show (chunkUnf1, chunkUnf2, chunkJoin)
+    let list = [1..size] :: [Int]
+        expected = zip list list
+        stream = StJoin chunkJoin (stFromList chunkUnf1 list) (stFromList chunkUnf2 list)
+    result <- streamToList stream
+    assertEquals expected result
+
 testUnfoldSplit :: Int -> (Int, Int) -> IO ()
 testUnfoldSplit size (chunkUnf, chunkSplit) = do
     putStr $ "* (" ++ elementsMsg size ++ ") - Chunck size = " ++ show (chunkUnf, chunkSplit)
@@ -96,7 +105,7 @@ testUnfoldUntil :: Int -> Int -> IO ()
 testUnfoldUntil size chunkUnf = do
     putStr $ "* (" ++ elementsMsg size ++ ") - Chunck size = " ++ show chunkUnf
     let list = [1..] :: [Int]
-        cant = 20
+        cant = size
         fun c _ = c + 1
         cond = (== cant)
         z = 0
@@ -119,7 +128,7 @@ testUnfoldSplitUntil1 :: Int -> (Int, Int) -> IO ()
 testUnfoldSplitUntil1 size (chunkUnf, chunkSplit) = do
     putStr $ "* (" ++ elementsMsg size ++ ") - Chunck size = " ++ show (chunkUnf, chunkSplit)
     let list = [1..] :: [Int]
-        cant = 5
+        cant = size
         fun c _ = c + 1
         cond = (== cant)
         expected = zip list (take cant list)
@@ -127,8 +136,8 @@ testUnfoldSplitUntil1 size (chunkUnf, chunkSplit) = do
     result <- streamToList stream
     assertEquals expected result
 
-allTests :: IO ()
-allTests = do 
+testAll :: IO ()
+testAll = do 
     putStrLn "StUnfold"
     testUnfold 0 1
     testUnfold 0 3
@@ -142,6 +151,11 @@ allTests = do
     testUnfoldMap 80 (4, 8)
     testUnfoldMap 87 (7, 3)
     testUnfoldMap 87 (3, 7)
+    putStrLn "StUnfold => StJoin"
+    testUnfoldJoin 50 (1, 1, 1)
+    testUnfoldJoin 50 (3, 3, 4)
+    testUnfoldJoin 50 (3, 7, 4)
+    testUnfoldJoin 50 (7, 3, 2)
     putStrLn "StUnfold => StSplit"
     testUnfoldSplit 50 (1, 1)
     testUnfoldSplit 50 (3, 3)
@@ -158,7 +172,6 @@ allTests = do
     testUnfoldAppend 50 50 ((5, 3), 7)
     testUnfoldAppend 49 73 ((5, 3), 7)
     putStrLn "StUnfold -> StUntil"
-    testUnfoldUntil 0 1
     testUnfoldUntil 100 1
     testUnfoldUntil 50 5
     testUnfoldUntil 80 8

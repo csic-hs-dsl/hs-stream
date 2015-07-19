@@ -228,6 +228,8 @@ data Stream s d where
     StMap      :: (NFData o) => Int -> (i -> o) -> Stream s i -> Stream s o
     StFilter   :: Int -> (i -> Bool) -> Stream s i -> Stream s i
     
+    StJoin     :: Int -> Stream s i1 -> Stream s i2 -> Stream s (i1, i2)
+    
     StSplit    :: Int -> (Stream s a -> Stream s b1) -> (Stream s a -> Stream s b2) -> Stream s a -> Stream s (b1, b2)
 
     StAppend   :: Int -> Stream s i -> Stream s i -> Stream s i
@@ -243,6 +245,11 @@ execStream ec (StUnfold n gen i) = sUnfold ec n gen i
 execStream ec (StMap n f st) = sMap ec n f =<< execStream ec st
 
 execStream ec (StFilter n c st) = sFilter ec n c =<< execStream ec st
+
+execStream ec (StJoin n st1 st2) = do
+    s1 <- execStream ec st1
+    s2 <- execStream ec st2
+    sJoin ec n s1 s2
 
 execStream ec (StSplit n f1 f2 st) = do
     s <- execStream ec st
