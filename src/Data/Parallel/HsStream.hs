@@ -36,7 +36,7 @@ import Control.Concurrent.Chan.Unagi.Bounded (InChan, OutChan, newChan, readChan
 ---------------------------------------------------------
 
 deathKill pids io = catch io (\ThreadKilled -> do
-    putStrLn "deathKill"
+--    putStrLn "deathKill"
     mapM_ killThread pids)
 
 -- Basta con un único threadId para luego encadenar el manejo de la señal (el caso interesante es el join)
@@ -123,10 +123,12 @@ sJoin ec n (S tid1 qi1) (S tid2 qi2) = do
                 (Nothing, Just chunk2) -> do
                     when (not $ S.null nAcc1) $
                         writeQueue qo (Just (S.zip nAcc1 chunk2))
+                    killThread tid2
                     writeQueue qo Nothing
                 (Just chunk1, Nothing) -> do
                     when (not $ S.null nAcc2) $
                         writeQueue qo (Just (S.zip chunk1 nAcc2))
+                    killThread tid1
                     writeQueue qo Nothing  
 
 sSplit :: IOEC -> Int -> S i -> IO (S i, S i)
