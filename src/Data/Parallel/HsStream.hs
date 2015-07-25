@@ -24,7 +24,9 @@ import Control.Monad (liftM, when)
 import Prelude hiding (id, mapM, mapM_, take, foldl)
 --import Prelude (Bool, Either, Int, Maybe(Just, Nothing), ($), Show, Read, Eq, Ord, (*), Monad)
 
-import Control.Concurrent.Chan.Unagi.Bounded (InChan, OutChan, newChan, readChan, writeChan, tryReadChan, tryRead)
+import qualified Control.Concurrent.Chan.Unagi as UQ
+import qualified Control.Concurrent.Chan.Unagi.Bounded as BQ 
+-- (InChan, OutChan, newChan, readChan, writeChan, tryReadChan, tryRead)
 
 
 {- ================================================================== -}
@@ -285,26 +287,39 @@ stFromList dim l = StUnfold dim go l
 
 data IOEC = IOEC { queueLimit :: Int }
 
-data Queue a = Queue { 
-    inChan :: InChan a, 
-    outChan :: OutChan a
-}
+data Queue a = Bounded (BQ.InChan a) (BQ.OutChan a) | Unbounded (UQ.InChan a) (UQ.OutChan a)
 
-newQueue :: Int -> IO (Queue a)
-newQueue limit = do
-    (inChan, outChan) <- newChan limit
-    return $ Queue inChan outChan
 
 readQueue :: Queue a -> IO a
-readQueue = readChan . outChan
+readQueue (Bounded _ outChan) = BQ.readChan outChan
+readQueue (Unbounded _ outChan) = UQ.readChan $ outChan
 
 tryReadQueue :: Queue a -> IO (Maybe a)
-tryReadQueue q = do
-    (elem, _) <- tryReadChan $ outChan q
-    tryRead elem
+tryReadQueue (Bounded _ outChan) = do
+    (elem, _) <- BQ.tryReadChan outChan
+    BQ.tryRead elem
+tryReadQueue (Unbounded _ outChan) = do
+    (elem, _) <- UQ.tryReadChan outChan
+    UQ.tryRead elem
 
 writeQueue :: Queue a -> a -> IO ()
-writeQueue = writeChan . inChan
+writeQueue (Bounded inChan _) = BQ.writeChan inChan
+writeQueue (Unbounded inChan _) = UQ.writeChan inChan
+
+
+newBQueue :: Int -> IO (Queue a)
+newBQueue limit = do
+    (inChan, outChan) <- BQ.newChan limit
+    return $ Bounded inChan outChan
+
+newUQueue :: IO (Queue a)
+newUQueue = do
+    (inChan, outChan) <- UQ.newChan
+    return $ Unbounded inChan outChan
+
+
+newQueue = newBQueue
+
 
 eval :: (NFData a) => a -> IO a
 eval a = do
