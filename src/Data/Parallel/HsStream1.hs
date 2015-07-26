@@ -105,11 +105,10 @@ instance Publisher S where
     subscribe pub sub = do
         cancelledMV <- newMVar False
         demandMV <- newMVar (0 :: Int)
-        let s = Subscrip cancelledMV demandMV
         -- guardar el subscriber en el pub
         subs <- takeMVar $ subscribers pub
         putMVar (subscribers pub) $ (AnySub sub):subs
-        onSubscribe sub s
+        onSubscribe sub $ Subscrip cancelledMV demandMV
 
 instance Subscriber S where
     onSubscribe sub s = do
@@ -120,11 +119,11 @@ instance Subscriber S where
         -- agregar el dato a la cola del sub
         writeQueue (inQueue sub) $ newData a
         -- restarle 1 al demand de la subscripcion
-        AnySubscrip subscrip <- readMVar $ subscription sub
+        subscrip <- readMVar $ subscription sub
         request subscrip $ -1
     onComplete sub = do
         -- cancelar la subscripcion del sub
-        AnySubscrip subscrip <- readMVar $ subscription sub
+        subscrip <- readMVar $ subscription sub
         cancel subscrip
     
 instance Processor S
@@ -145,7 +144,21 @@ newData a = DataMsg $ Just a
 data AnySub d = forall sub. Subscriber sub => AnySub (sub d)
 data AnySubscrip = forall subscrip. Subscription subscrip => AnySubscrip subscrip
 
-data S d = S {strId :: ThreadId, inQueue :: (Queue (QData d)), subscription :: MVar AnySubscrip, subscribers :: MVar [AnySub d]}
+instance Subscriber AnySub where
+    onSubscribe (AnySub sub) = onSubscribe sub
+    onNext (AnySub sub) = onNext sub
+    onComplete (AnySub sub) = onComplete sub
+    
+instance Subscription AnySubscrip where
+    request (AnySubscrip s) = request s
+    cancel (AnySubscrip s) = cancel s
+
+data S d = S {
+    strId :: ThreadId, 
+    inQueue :: (Queue (QData d)), 
+    subscription :: MVar AnySubscrip, 
+    subscribers :: MVar [AnySub d]
+}
 
 -----------------
 -- stream
