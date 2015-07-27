@@ -141,9 +141,14 @@ instance Subscription Subscrip where
 data QData d = DataMsg (Maybe d) | KillMsg
 newData a = DataMsg $ Just a
 
+data AnyPub d = forall pub. Publisher pub => AnyPub (pub d)
 data AnySub d = forall sub. Subscriber sub => AnySub (sub d)
 data AnySubscrip = forall subscrip. Subscription subscrip => AnySubscrip subscrip
+data AnyProc d = forall p. Processor p => AnyProc (p d)
 
+instance Publisher AnyPub where
+    subscribe (AnyPub pub) = subscribe pub
+    
 instance Subscriber AnySub where
     onSubscribe (AnySub sub) = onSubscribe sub
     onNext (AnySub sub) = onNext sub
@@ -153,30 +158,35 @@ instance Subscription AnySubscrip where
     request (AnySubscrip s) = request s
     cancel (AnySubscrip s) = cancel s
 
+instance Publisher AnyProc where
+    subscribe (AnyProc pub) = subscribe pub
+    
+instance Subscriber AnyProc where
+    onSubscribe (AnyProc sub) = onSubscribe sub
+    onNext (AnyProc sub) = onNext sub
+    onComplete (AnyProc sub) = onComplete sub
+
+instance Processor AnyProc where
+    
 data S d = S {
-    strId :: ThreadId, 
-    inQueue :: (Queue (QData d)), 
+--    strId        :: ThreadId, 
+    inQueue      :: Queue (QData d), 
     subscription :: MVar AnySubscrip, 
-    subscribers :: MVar [AnySub d]
+    subscribers  :: MVar [AnySub d]
 }
 
 -----------------
--- stream
+-- operaciones de bajo nivel
 -----------------
 
-data Stream s d where
-    StWrap     :: s o -> Stream s o
-
-    StUnfold   :: (NFData o) => Int -> (i -> (Maybe (o, i))) -> i -> Stream s o
+sMap :: (NFData o) => (i -> o) -> AnyPub i -> IO (AnyProc o)
+sMap f pub = do
+    inQ <- newUQueue
+    mySubscription <- newEmptyMVar
+    mySubscribers <- newEmptyMVar
+    let p = S inQ mySubscription mySubscribers
+--    subscribe pub p
+    _ <- forkIO $ recurse p
+    return $ AnyProc p
     
-    StMap      :: (NFData o) => Int -> (i -> o) -> Stream s i -> Stream s o
-    StFilter   :: Int -> (i -> Bool) -> Stream s i -> Stream s i
-    
-    StJoin     :: Int -> Stream s i1 -> Stream s i2 -> Stream s (i1, i2)
-    
-    StSplit    :: Int -> (Stream s a -> Stream s b1) -> (Stream s a -> Stream s b2) -> Stream s a -> Stream s (b1, b2)
-
-    StAppend   :: Int -> Stream s i -> Stream s i -> Stream s i
-    
-    StUntil    :: (c -> i -> c) -> c -> (c -> Bool) -> Stream s i -> Stream s i
-    
+    where recurse p = undefined
