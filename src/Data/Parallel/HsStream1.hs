@@ -82,7 +82,7 @@ class Subscription s where
     cancel  :: s -> IO()
 
 class Processor pro where
-    subscribe   :: pro a b -> pro b c -> IO()
+    subscribe   :: (Processor sub) => pro a b -> sub b c -> IO()
     onSubscribe :: (Subscription s) => pro a b -> s -> IO()
     onNext      :: pro a b -> a -> IO()
     onComplete  :: pro a b -> IO()
@@ -112,12 +112,12 @@ instance Processor S where
         -- cancelar la subscripcion del sub
         subscrip <- readMVar $ subscription sub
         cancel subscrip
-    subscribe pub sub = do
+    subscribe pub@(S _ _ subscribers_pub) sub = do
         cancelledMV <- newMVar False
         demandMV <- newMVar (0 :: Int)
         -- guardar el subscriber en el pub
-        subs <- takeMVar $ subscribers pub
-        putMVar (subscribers pub) $ (AnyProc sub):subs
+        subs <- takeMVar $ subscribers_pub
+        putMVar (subscribers_pub) $ (AnyProc sub):subs
         onSubscribe sub $ Subscrip cancelledMV demandMV    
 
 instance Subscription Subscrip where
