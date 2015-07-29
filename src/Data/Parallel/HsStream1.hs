@@ -77,19 +77,15 @@ newQueue = newBQueue
 -- clases
 -----------------
 
-class Publisher pub where
-    subscribe :: (Subscriber sub) => pub a -> sub a -> IO()
-
-class Subscriber sub where
-    onSubscribe :: (Subscription s) => sub a -> s -> IO()
-    onNext      :: sub a -> a -> IO()
-    onComplete  :: sub a -> IO()
-
 class Subscription s where
     request :: s -> Int -> IO()
     cancel  :: s -> IO()
 
-class (Publisher pro, Subscriber pro) => Processor pro
+class Processor pro where
+    subscribe   :: pro a b -> pro b c -> IO()
+    onSubscribe :: (Subscription s) => pro a b -> s -> IO()
+    onNext      :: pro a b -> a -> IO()
+    onComplete  :: pro a b -> IO()
 
 -----------------
 -- datos
@@ -101,16 +97,7 @@ data Subscrip = Subscrip {cancelled :: MVar Bool, demand :: MVar Int}
 -- instancias
 -----------------
 
-instance Publisher S where
-    subscribe pub sub = do
-        cancelledMV <- newMVar False
-        demandMV <- newMVar (0 :: Int)
-        -- guardar el subscriber en el pub
-        subs <- takeMVar $ subscribers pub
-        putMVar (subscribers pub) $ (AnySub sub):subs
-        onSubscribe sub $ Subscrip cancelledMV demandMV
-
-instance Subscriber S where
+instance Processor S where
     onSubscribe sub s = do
         -- guardar la subscripción en el sub
         putMVar (subscription sub) $ AnySubscrip s
@@ -125,8 +112,13 @@ instance Subscriber S where
         -- cancelar la subscripcion del sub
         subscrip <- readMVar $ subscription sub
         cancel subscrip
-    
-instance Processor S
+    subscribe pub sub = do
+        cancelledMV <- newMVar False
+        demandMV <- newMVar (0 :: Int)
+        -- guardar el subscriber en el pub
+        subs <- takeMVar $ subscribers pub
+        putMVar (subscribers pub) $ (AnyProc sub):subs
+        onSubscribe sub $ Subscrip cancelledMV demandMV    
 
 instance Subscription Subscrip where
     request s req = do
@@ -141,45 +133,32 @@ instance Subscription Subscrip where
 data QData d = DataMsg (Maybe d) | KillMsg
 newData a = DataMsg $ Just a
 
-data AnyPub d = forall pub. Publisher pub => AnyPub (pub d)
-data AnySub d = forall sub. Subscriber sub => AnySub (sub d)
 data AnySubscrip = forall subscrip. Subscription subscrip => AnySubscrip subscrip
-data AnyProc d = forall p. Processor p => AnyProc (p d)
+data AnyProc a b = forall p. Processor p => AnyProc (p a b)
 
-instance Publisher AnyPub where
-    subscribe (AnyPub pub) = subscribe pub
-    
-instance Subscriber AnySub where
-    onSubscribe (AnySub sub) = onSubscribe sub
-    onNext (AnySub sub) = onNext sub
-    onComplete (AnySub sub) = onComplete sub
-    
+instance Processor AnyProc where
+    onSubscribe (AnyProc sub) = onSubscribe sub
+    onNext (AnyProc sub) = onNext sub
+    onComplete (AnyProc sub) = onComplete sub
+    subscribe (AnyProc pub) = subscribe pub
+        
 instance Subscription AnySubscrip where
     request (AnySubscrip s) = request s
     cancel (AnySubscrip s) = cancel s
 
-instance Publisher AnyProc where
-    subscribe (AnyProc pub) = subscribe pub
     
-instance Subscriber AnyProc where
-    onSubscribe (AnyProc sub) = onSubscribe sub
-    onNext (AnyProc sub) = onNext sub
-    onComplete (AnyProc sub) = onComplete sub
-
-instance Processor AnyProc where
-    
-data S d = S {
+data S i o = forall x. S {
 --    strId        :: ThreadId, 
-    inQueue      :: Queue (QData d), 
+    inQueue      :: Queue (QData i), 
     subscription :: MVar AnySubscrip, 
-    subscribers  :: MVar [AnySub d]
+    subscribers  :: MVar [AnyProc o x]
 }
 
 -----------------
 -- operaciones de bajo nivel
 -----------------
 
-sMap :: (NFData o) => (i -> o) -> AnyPub i -> IO (AnyProc o)
+sMap :: (NFData o) => (x -> o) -> AnyProc i x -> IO (AnyProc i o)
 sMap f pub = do
     inQ <- newUQueue
     mySubscription <- newEmptyMVar
